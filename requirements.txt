@@ -11,6 +11,7 @@ openpyxl>=3.1.0  # Excel file support
 # API & HTTP
 requests>=2.31.0
 google-genai
+openai>=1.30.0  # OpenAI and Azure OpenAI support
 
 # Environment & Configuration
 python-dotenv>=1.0.0
