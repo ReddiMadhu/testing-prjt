@@ -1,0 +1,31 @@
+[theme]
+# EXL Orange Theme Configuration
+primaryColor = "#E85D04"
+backgroundColor = "#FAFAFA"
+secondaryBackgroundColor = "#FFF8F0"
+textColor = "#1A1A2E"
+font = "sans serif"
+
+[server]
+# Server configuration for production
+headless = true
+maxUploadSize = 50
+runOnSave = false
+
+[browser]
+# Browser configuration
+gatherUsageStats = false
+serverAddress = "localhost"
+
+[runner]
+# Runner configuration
+magicEnabled = true
+
+[client]
+# Client configuration  
+showErrorDetails = false
+toolbarMode = "minimal"
+
+[logger]
+# Logging configuration
+level = "info"
