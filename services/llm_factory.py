@@ -6,6 +6,7 @@ Factory pattern to select the appropriate LLM service based on configuration
 from config.settings import Settings
 from services.claude_service import ClaudeService
 from services.gemini_service import GeminiService
+from services.langchain_gemini_service import LangChainGeminiService
 
 
 def get_llm_service(provider: str = None):
@@ -21,17 +22,6 @@ def get_llm_service(provider: str = None):
     """
     settings = Settings()
     
-    # Use provided provider or fall back to settings
-    if not provider:
-        provider = settings.llm_provider
-    
-    provider = provider.lower()
-    
-    if provider == "gemini":
-        return GeminiService()
-    elif provider == "openai":
-        from services.openai_service import OpenAIService
-        return OpenAIService()
-    else:
+
         # Default to Claude
-        return ClaudeService()
+    return LangChainGeminiService()

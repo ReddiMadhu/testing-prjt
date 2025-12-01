@@ -33,3 +33,6 @@ flake8>=6.1.0
 
 # Security
 python-dateutil>=2.8.0
+langchain 
+langchain-google-genai 
+langgraph 
