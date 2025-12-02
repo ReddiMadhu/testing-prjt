@@ -17,6 +17,7 @@ from config.theme import EXLTheme
 # Services
 from services.llm_factory import get_llm_service
 from services.file_service import FileService
+from services.analytics_service import AnalyticsService
 
 # Components
 from components.sidebar import render_sidebar
@@ -30,6 +31,7 @@ from components.file_uploader import (
 )
 from components.results_display import render_results
 from components.metrics import render_file_metrics
+from components.analytics_display import render_analytics_dashboard
 
 # Utilities
 from utils.helpers import format_duration, generate_timestamp
@@ -62,7 +64,9 @@ def initialize_session_state():
         'file_info': None,
         'processing_started': False,
         'processing_complete': False,
-        'error_message': None
+        'error_message': None,
+        'show_analytics': False,  # NEW: Track analytics view
+        'analytics_result': None  # NEW: Store analytics result
     }
     
     for key, value in defaults.items():
@@ -79,6 +83,11 @@ def reset_session_state():
     st.session_state.processing_started = False
     st.session_state.processing_complete = False
     st.session_state.error_message = None
+    st.session_state.show_analytics = False
+    st.session_state.analytics_result = None
+
+
+# ...existing code for handle_file_upload, process_transcripts, render_processing_section...
 
 
 def handle_file_upload(uploaded_file):
@@ -209,6 +218,11 @@ def process_transcripts(
         
         # Update progress
         progress_bar.progress((idx + 1) / num_rows)
+        
+        # Sleep between API calls to avoid rate limiting (except for last item)
+        if idx < num_rows - 1:
+            sleep_time = 2.0  # Configurable sleep time in seconds
+            time.sleep(sleep_time)
     
     # Clear status and show completion
     total_time = time.time() - start_time
@@ -340,6 +354,18 @@ def render_processing_section(df: pd.DataFrame):
                 st.rerun()
 
 
+def run_further_analysis():
+    """Run the LangGraph analytics workflow"""
+    try:
+        with st.spinner("🔄 Running AI-powered analytics..."):
+            analytics_service = AnalyticsService()
+            result = analytics_service.analyze(st.session_state.processed_data)
+            st.session_state.analytics_result = result
+            st.session_state.show_analytics = True
+    except Exception as e:
+        st.error(f"❌ Error running analytics: {str(e)}")
+
+
 def render_download_section(processed_df: pd.DataFrame):
     """
     Render the download section for results
@@ -355,13 +381,13 @@ def render_download_section(processed_df: pd.DataFrame):
     timestamp = generate_timestamp()
     base_filename = f"FNOL_Analysis_Results_{timestamp}"
     
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
     
     with col1:
         # Excel download
         excel_data = file_service.export_to_excel(processed_df)
         st.download_button(
-            label="Download Excel (.xlsx)",
+            label="📥 Download Excel",
             data=excel_data,
             file_name=f"{base_filename}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -372,7 +398,7 @@ def render_download_section(processed_df: pd.DataFrame):
         # CSV download
         csv_data = file_service.export_to_csv(processed_df)
         st.download_button(
-            label="Download CSV (.csv)",
+            label="📥 Download CSV",
             data=csv_data,
             file_name=f"{base_filename}.csv",
             mime="text/csv",
@@ -380,8 +406,14 @@ def render_download_section(processed_df: pd.DataFrame):
         )
     
     with col3:
+        # Further Analysis button
+        if st.button("📊 Further Analysis", type="primary", use_container_width=True):
+            run_further_analysis()
+            st.rerun()
+    
+    with col4:
         # Reset button
-        if st.button("Further Analysis", use_container_width=True):
+        if st.button("🔄 New Upload", use_container_width=True):
             reset_session_state()
             st.rerun()
 
@@ -398,8 +430,31 @@ def main():
     # Render sidebar
     render_sidebar()
     
-    # Render main header
-    # render_header()
+    # Check if we should show analytics view
+    if st.session_state.show_analytics and st.session_state.analytics_result:
+        # Back button
+        col1, col2 = st.columns([1, 6])
+        with col1:
+            if st.button("← Back to Results"):
+                st.session_state.show_analytics = False
+                st.rerun()
+        
+        # Render analytics dashboard
+        render_analytics_dashboard(st.session_state.analytics_result)
+        
+        # Footer
+        st.markdown("---")
+        st.markdown("""
+        <div style="text-align: center; padding: 1rem; color: #666;">
+            <p style="margin: 0; font-size: 0.85rem;">
+                <strong>EXL FNOL Transcript Analyzer</strong> | Industrial Edition v2.0
+            </p>
+            <p style="margin: 0.25rem 0 0 0; font-size: 0.8rem;">
+                Powered by © 2025 EXL Service
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        return
     
     # File Upload Section with Clear button
     col_header, col_clear = st.columns([6, 1])
@@ -417,7 +472,7 @@ def main():
     
     if uploaded_file is not None:
         # Handle file upload
-        if st.session_state.data is None or st.session_state.file_info is None:
+        if not st.session_state.file_uploaded:
             df, file_info, error = handle_file_upload(uploaded_file)
             
             if error:
@@ -429,7 +484,7 @@ def main():
                 st.session_state.file_uploaded = True
         
         # Display file info and data
-        if st.session_state.data is not None and st.session_state.file_info is not None:
+        if st.session_state.file_uploaded and st.session_state.data is not None:
             render_file_metrics(st.session_state.file_info)
             
             st.markdown("---")
@@ -447,9 +502,11 @@ def main():
                 render_download_section(st.session_state.processed_data)
     
     else:
+        # File was removed - reset state if previously uploaded
+        if st.session_state.file_uploaded:
+            reset_session_state()
         # Show empty state
-        if not st.session_state.file_uploaded:
-            render_empty_state()
+        render_empty_state()
     
     # Footer
     st.markdown("---")

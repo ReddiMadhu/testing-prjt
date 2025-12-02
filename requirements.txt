@@ -16,6 +16,8 @@ openai>=1.30.0  # OpenAI and Azure OpenAI support
 # Environment & Configuration
 python-dotenv>=1.0.0
 
+# Visualization
+plotly>=5.18.0
 # Logging & Monitoring
 loguru>=0.7.0
 

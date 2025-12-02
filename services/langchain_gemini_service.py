@@ -88,11 +88,12 @@ class LangChainGeminiService:
         self.settings = Settings()
         self.model_name = "gemini-2.5-flash"
         self.retry_attempts = 4
-        self.retry_delay = 1.0
+        self.retry_delay = 2.0  # Initial retry delay in seconds
         
-        # Rate limiting
+        # Rate limiting configuration - adjust these to overcome rate limits
         self._last_request_time = 0
-        self._min_request_interval = 0.5
+        self._min_request_interval = 2.0  # Minimum seconds between API calls
+        self._sleep_between_calls = 1.5  # Additional sleep time between transcript analyses
         
         # Setup API key
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
@@ -290,11 +291,20 @@ Return your analysis using the required JSON schema."""
         self.workflow = graph.compile()
     
     def _rate_limit(self):
-        """Implement rate limiting between requests"""
+        """Implement rate limiting between requests to avoid API rate limits"""
         current_time = time.time()
         elapsed = current_time - self._last_request_time
+        
+        # Ensure minimum interval between requests
         if elapsed < self._min_request_interval:
-            time.sleep(self._min_request_interval - elapsed)
+            sleep_time = self._min_request_interval - elapsed
+            logger.info(f"Rate limiting: sleeping for {sleep_time:.2f}s")
+            time.sleep(sleep_time)
+        
+        # Additional sleep to be safe with rate limits
+        if self._sleep_between_calls > 0:
+            time.sleep(self._sleep_between_calls)
+        
         self._last_request_time = time.time()
     
     def analyze_transcript(self, transcript: str) -> AnalysisResult:
@@ -358,14 +368,16 @@ Return your analysis using the required JSON schema."""
     def analyze_batch(
         self, 
         transcripts: List[str], 
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        sleep_between: float = 2.0
     ) -> List[AnalysisResult]:
         """
-        Analyze multiple transcripts with progress tracking
+        Analyze multiple transcripts with progress tracking and rate limiting
         
         Args:
             transcripts: List of transcripts to analyze
             progress_callback: Optional callback function(current, total) for progress updates
+            sleep_between: Seconds to sleep between each transcript analysis (default: 2.0)
             
         Returns:
             List of AnalysisResult objects
@@ -379,6 +391,11 @@ Return your analysis using the required JSON schema."""
             
             if progress_callback:
                 progress_callback(i + 1, total)
+            
+            # Sleep between calls to avoid rate limiting (except for last item)
+            if i < total - 1 and sleep_between > 0:
+                logger.info(f"Sleeping {sleep_between}s between transcript analyses to avoid rate limits")
+                time.sleep(sleep_between)
         
         return results
     
