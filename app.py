@@ -199,6 +199,7 @@ def process_transcripts(
             new_row['Transcript_ID'] = transcript_id
             new_row['Agent_Name'] = agent_name
             new_row['Missed_Points'] = "; ".join(result.missed_points)
+            new_row['Missed_Themes'] = "; ".join(result.missed_themes)
             new_row['Num_Missed'] = result.num_missed
             new_row['Sequence_Followed'] = result.sequence_followed
             new_row['Summary_Missed_Things'] = result.summary_missed_things
@@ -211,6 +212,7 @@ def process_transcripts(
             new_row['Transcript_ID'] = transcript_id
             new_row['Agent_Name'] = agent_name
             new_row['Missed_Points'] = transcript_validation.message
+            new_row['Missed_Themes'] = ""
             new_row['Num_Missed'] = 0
             new_row['Sequence_Followed'] = "N/A"
             new_row['Summary_Missed_Things'] = "Invalid transcript"

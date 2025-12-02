@@ -70,7 +70,7 @@ def render_overall_metrics(result: AnalyticsResult):
 
 
 def render_top_missed_elements(elements: List[SOPElementAnalysis]):
-    """Render top missed SOP elements chart"""
+    """Render top missed SOP elements chart with theme breakdown"""
     st.markdown("### 🎯 Top Missed SOP Elements")
     
     if not elements:
@@ -80,8 +80,9 @@ def render_top_missed_elements(elements: List[SOPElementAnalysis]):
     # Create DataFrame for chart
     df = pd.DataFrame([
         {
-            "Element": f"{e.element_id}: {e.element_name[:30]}...",
+            "Element": f"{e.element_id}: {e.element_name[:25]}...",
             "Full Name": e.element_name,
+            "Theme": e.theme,
             "Miss Count": e.miss_count,
             "Miss Rate (%)": e.miss_percentage,
             "Severity": e.severity,
@@ -96,21 +97,49 @@ def render_top_missed_elements(elements: List[SOPElementAnalysis]):
         y="Element",
         x="Miss Rate (%)",
         orientation="h",
-        color="Severity",
-        color_discrete_map={"High": "#E53935", "Medium": "#FB8C00", "Low": "#43A047"},
-        hover_data=["Full Name", "Miss Count", "Affected Agents"],
+        color="Theme",
+        hover_data=["Full Name", "Theme", "Miss Count", "Affected Agents"],
         title=""
     )
     
     fig.update_layout(
-        height=400,
+        height=450,
         yaxis={'categoryorder': 'total ascending'},
         showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=40, b=20)
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
+        margin=dict(l=20, r=20, t=60, b=20)
     )
     
     st.plotly_chart(fig, use_container_width=True)
+    
+    # Theme summary
+    theme_counts = {}
+    for elem in elements:
+        theme = elem.theme
+        if theme not in theme_counts:
+            theme_counts[theme] = {"count": 0, "total_misses": 0}
+        theme_counts[theme]["count"] += 1
+        theme_counts[theme]["total_misses"] += elem.miss_count
+    
+    if theme_counts:
+        st.markdown("#### 📂 Theme Breakdown")
+        theme_cols = st.columns(min(len(theme_counts), 3))
+        for i, (theme, stats) in enumerate(sorted(theme_counts.items(), key=lambda x: x[1]["total_misses"], reverse=True)):
+            with theme_cols[i % 3]:
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #FFF3E0 0%, #FFFFFF 100%);
+                    padding: 0.75rem;
+                    border-radius: 8px;
+                    text-align: center;
+                    border: 1px solid #FFE0B2;
+                    margin-bottom: 0.5rem;
+                ">
+                    <small style="color: #666; font-size: 0.75rem;">{theme}</small><br>
+                    <strong style="color: #E65100; font-size: 1.2rem;">{stats['total_misses']}</strong>
+                    <small style="color: #666;"> misses</small>
+                </div>
+                """, unsafe_allow_html=True)
     
     # Show detailed table
     with st.expander("📋 View Detailed Breakdown"):
@@ -118,6 +147,7 @@ def render_top_missed_elements(elements: List[SOPElementAnalysis]):
             severity_color = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}[elem.severity]
             st.markdown(f"""
             **{severity_color} {elem.element_id}: {elem.element_name}**
+            - **Theme:** {elem.theme}
             - Miss Rate: {elem.miss_percentage}% ({elem.miss_count} times)
             - Affected Agents: {', '.join(elem.affected_agents[:5])}{'...' if len(elem.affected_agents) > 5 else ''}
             """)
@@ -319,6 +349,67 @@ def render_improvement_suggestions(suggestions: List[ImprovementSuggestion]):
                 st.markdown(f"**{sugg.target}** - {sugg.area}: {sugg.suggestion}")
 
 
+def render_theme_analysis(elements: List[SOPElementAnalysis]):
+    """Render theme-based analysis chart"""
+    st.markdown("### 📂 SOP Compliance by Theme")
+    
+    if not elements:
+        st.info("No theme data available")
+        return
+    
+    # Aggregate by theme
+    theme_data = {}
+    for elem in elements:
+        theme = elem.theme
+        if theme not in theme_data:
+            theme_data[theme] = {"count": 0, "total_misses": 0, "elements": []}
+        theme_data[theme]["count"] += 1
+        theme_data[theme]["total_misses"] += elem.miss_count
+        theme_data[theme]["elements"].append(elem.element_name)
+    
+    # Create DataFrame for pie chart
+    df = pd.DataFrame([
+        {"Theme": theme, "Total Misses": data["total_misses"], "Elements Count": data["count"]}
+        for theme, data in theme_data.items()
+    ])
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Pie chart
+        fig = px.pie(
+            df,
+            values="Total Misses",
+            names="Theme",
+            title="Miss Distribution by Theme",
+            hole=0.4
+        )
+        fig.update_layout(
+            height=350,
+            margin=dict(l=20, r=20, t=50, b=20),
+            legend=dict(font=dict(size=9))
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # Bar chart
+        fig = px.bar(
+            df.sort_values("Total Misses", ascending=True),
+            y="Theme",
+            x="Total Misses",
+            orientation="h",
+            title="Total Misses per Theme",
+            color="Total Misses",
+            color_continuous_scale="Reds"
+        )
+        fig.update_layout(
+            height=350,
+            margin=dict(l=20, r=20, t=50, b=20),
+            showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+
 def render_llm_insights(insights: str):
     """Render LLM-generated insights"""
     st.markdown("### 🤖 AI-Powered Insights")
@@ -358,6 +449,11 @@ def render_analytics_dashboard(result: AnalyticsResult):
     
     with col2:
         render_agent_rankings(result.agent_rankings)
+    
+    st.markdown("---")
+    
+    # Theme analysis
+    render_theme_analysis(result.top_missed_elements)
     
     st.markdown("---")
     

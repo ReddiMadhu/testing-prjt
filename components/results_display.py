@@ -183,8 +183,8 @@ def render_results_table(processed_df: pd.DataFrame):
     else:
         display_df = processed_df
     
-    # Prepare display columns with new format
-    display_cols = ['Transcript_ID', 'Agent_Name', 'Missed_Points', 'Num_Missed', 'Sequence_Followed', 'Summary_Missed_Things']
+    # Prepare display columns with new format (including Missed_Themes)
+    display_cols = ['Transcript_ID', 'Agent_Name', 'Missed_Points', 'Missed_Themes', 'Num_Missed', 'Sequence_Followed', 'Summary_Missed_Things']
     
     # Filter to only include columns that exist in the dataframe
     display_cols = [col for col in display_cols if col in processed_df.columns]

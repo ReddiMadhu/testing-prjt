@@ -29,7 +29,10 @@ logger = logging.getLogger(__name__)
 class SOPAnalysis(BaseModel):
     """Structured output model for SOP compliance analysis"""
     missed_points: List[str] = Field(
-        description="List of SOP elements/points that were missed or inadequately addressed in the transcript"
+        description="List of SOP elements/points that were missed. Each item MUST be exactly as written in the SOP checklist (e.g., 'Did not ask about...')"
+    )
+    missed_themes: List[str] = Field(
+        description="List of unique themes that have missed elements (e.g., 'CALL OPENING & IDENTITY VERIFICATION', 'DAMAGE ASSESSMENT')"
     )
     num_missed: int = Field(
         description="Total count of missed points"
@@ -38,7 +41,7 @@ class SOPAnalysis(BaseModel):
         description="Whether the proper SOP sequence was followed: 'Yes' or 'No'"
     )
     summary_missed_things: str = Field(
-        description="Brief summary of what was missed and why it matters for claim processing"
+        description="Brief summary of what was missed and why it matters for claim processing"    
     )
 
 
@@ -48,6 +51,7 @@ class AnalysisState(TypedDict):
     transcript_id: Optional[str]
     agent_name: Optional[str]
     missed_points: List[str]
+    missed_themes: List[str]
     num_missed: int
     sequence_followed: str
     summary_missed_things: str
@@ -59,6 +63,7 @@ class AnalysisState(TypedDict):
 class AnalysisResult:
     """Data class for analysis results"""
     missed_points: List[str]
+    missed_themes: List[str]
     num_missed: int
     sequence_followed: str
     summary_missed_things: str
@@ -159,9 +164,93 @@ class LangChainGeminiService:
             logger.error(f"Failed to setup LLM: {e}")
             raise
     def _get_sop_checklist(self) -> str:
-        """Get formatted SOP checklist from settings"""
-        sop_elements = self.settings.get_sop_elements_list()
-        return "\n".join([f"{i+1}. {elem}" for i, elem in enumerate(sop_elements)])
+        """Get formatted SOP checklist with all 61 elements organized by themes"""
+        checklist = """
+=== VALID SOP ELEMENTS (ONLY PICK FROM THIS LIST) ===
+
+**THEME: CALL OPENING & IDENTITY VERIFICATION**
+- Did not ask if caller has policy number upfront using suggested wording
+- Did not verify if caller is policyholder/spouse/authorized person
+- Did not set clear explanation of FNOL process using suggested wording
+- Did not explain call recording/monitoring purpose
+- Did not verify if caller needs immediate medical assistance
+
+**THEME: CONTACT INFORMATION VERIFICATION**
+- Did not verify/update mailing address
+- Did not verify/update phone numbers
+- Did not verify/update email address
+- Did not read back contact information for verification
+- Did not verify language preferences
+- Did not verify if caller has different name/address than policy
+- Did not identify main contact for claim
+- Did not verify/update notification preferences
+- Did not verify/update texting program preferences
+
+**THEME: LOSS DETAILS GATHERING**
+- Did not verify if loss date/time was approximate
+- Did not ask for purpose of trip
+- Did not gather complete loss location details (cross streets, mile markers, location type)
+- Did not ask about weather conditions
+- Did not ask about witnesses
+- Did not ask about property damage
+- Did not create proper running notes
+
+**THEME: VEHICLE INFORMATION**
+- Did not verify vehicle ownership/policy listing
+- Did not gather complete vehicle details (style, color, VIN, license plate, state)
+- Did not ask for odometer reading
+- Did not ask if vehicle was stolen
+- Did not ask about vehicle recovery condition (for stolen vehicles)
+- Did not ask if vehicle was parked/unoccupied
+- Did not ask about anti-theft devices
+- Did not ask if vehicle was locked
+
+**THEME: DAMAGE ASSESSMENT**
+- Did not properly document point of first impact
+- Did not properly document all damaged areas
+- Did not ask about airbag deployment
+- Did not verify vehicle drivability
+- Did not ask if vehicle starts (for non-drivable vehicles)
+- Did not ask about equipment failure
+- Did not document interior damage
+- Did not document personal effects damage
+
+**THEME: INJURY & SAFETY**
+- Did not ask about injuries for all parties
+- Did not verify intention to seek medical treatment
+- Did not ask about number of passengers
+- Did not ask about child car seat (especially for California claims)
+- Did not gather passenger contact information
+
+**THEME: INCIDENT DOCUMENTATION**
+- Did not ask about police notification/report
+- Did not ask about citations/tickets
+- Did not gather other party's insurance carrier information
+- Did not ask about special claim permissions (employee/sensitive)
+
+**THEME: SERVICES OFFERING**
+- Did not offer accident scene towing
+- Did not offer Auto Repair Network (OYSARN)
+- Did not offer Drive-In services
+- Did not offer Virtual Appraisal
+- Did not offer rental car services
+- Did not offer Auto Glass services
+- Did not explain services in proper sequence
+
+**THEME: CLAIM PROCESSING**
+- Did not explain payment preferences/options
+- Did not share deductible information
+- Did not explain 'Track Your Claim' functionality
+- Did not explain next steps and timeline
+- Did not ask if caller has documents/photos to upload
+- Did not verify if warm transfer is needed/eligible
+
+**THEME: CALL CONCLUSION**
+- Did not provide claim number
+- Did not ask if caller wants to write down claim information
+
+=== END OF VALID SOP ELEMENTS ==="""
+        return checklist
     
     def _get_sop_content(self) -> str:
         """Get the loaded SOP content for use in prompts"""
@@ -175,29 +264,40 @@ class LangChainGeminiService:
             ("system", 
              """You are an expert insurance compliance analyst specializing in FNOL (First Notice of Loss) call quality assessment.
 
-You will analyze the provided FNOL call transcript between an AI voice agent/human agent and an insurance holder. Your task is to evaluate compliance against the official SOP document provided below.
+You will analyze the provided FNOL call transcript between an AI voice agent/human agent and an insurance holder. Your task is to evaluate compliance against the official SOP document and the SOP elements checklist.
 
 === OFFICIAL SOP DOCUMENT ===
 {sop_document}
 === END OF SOP DOCUMENT ===
 
-EVALUATION CRITERIA:
-Based on the SOP document above, evaluate the transcript for:
 {checklist}
-1. **missed_points**: Identify ALL elements from the SOP that were missed or inadequately addressed. Reference the specific Data IDs (e.g., [ID-1], [ID-2], etc.) and phase requirements:
-   - Phase 1: Initiation & Verification (Greeting, Safety Check, Policyholder Verification [ID-1])
-   - Phase 2: Incident Details (Datetime/Location [ID-2], Description [ID-3], Property Damage [ID-6])
-   - Phase 3: Liability & Legal (Injuries [ID-5], Parties Involved [ID-4], Witnesses [ID-8], Police Report [ID-7])
-   - Phase 4: Closing (Documentation [ID-9], Claim Number [ID-11], Next Steps [ID-10])
-   - Core Behavioral Guidelines: Tone Protocol [ID-12], Safety First, Active Listening, No Hallucinations
 
-2. **num_missed**: Count the total number of missed points
+CRITICAL INSTRUCTIONS:
+- You MUST ONLY identify missed elements from the VALID SOP ELEMENTS list above
+- Do NOT invent or add any elements that are not in the list
+- Each missed_point MUST be exactly as written in the list (e.g., "Did not ask about...")
+- Identify which THEMES have missed elements based on the groupings above
 
-3. **sequence_followed**: Determine if the agent followed the proper SOP sequence:
-   - 'Yes' if the call followed: Phase 1 → Phase 2 → Phase 3 → Phase 4
-   - 'No' if major phases were out of order or critical steps were skipped
+EVALUATION CRITERIA:
 
-4. **summary_missed_things**: Provide a brief summary explaining what was missed and the impact on claim processing
+1. **missed_points**: List ONLY elements from the SOP checklist that were missed or inadequately addressed.
+   - Use EXACT wording from the list (e.g., "Did not verify/update mailing address")
+   - Only include elements that are clearly missing from the transcript
+
+2. **missed_themes**: List the UNIQUE theme names that have at least one missed element.
+   - Valid themes: "CALL OPENING & IDENTITY VERIFICATION", "CONTACT INFORMATION VERIFICATION", "LOSS DETAILS GATHERING", "VEHICLE INFORMATION", "DAMAGE ASSESSMENT", "INJURY & SAFETY", "INCIDENT DOCUMENTATION", "SERVICES OFFERING", "CLAIM PROCESSING", "CALL CONCLUSION"
+   - Only include themes that have at least one missed element
+
+3. **num_missed**: Count the total number of missed points (must match length of missed_points list)
+
+4. **sequence_followed**: Determine if the agent followed the proper SOP sequence:
+   - 'Yes' if themes were addressed in logical order: Opening → Contact → Loss Details → Vehicle → Damage → Injury → Documentation → Services → Processing → Conclusion
+   - 'No' if major themes were out of order or critical steps were skipped
+
+5. **summary_missed_things**: Brief summary explaining:
+   - Which themes had the most gaps
+   - Critical missing information for claim processing
+   - Overall compliance assessment
 
 Return your analysis using the required JSON schema."""
             ),
@@ -221,6 +321,7 @@ Return your analysis using the required JSON schema."""
             if not transcript or not transcript.strip():
                 return {
                     "missed_points": ["No transcript provided"],
+                    "missed_themes": [],
                     "num_missed": 0,
                     "sequence_followed": "N/A",
                     "summary_missed_things": "Empty transcript - unable to analyze",
@@ -253,6 +354,7 @@ Return your analysis using the required JSON schema."""
                     if llm_response:
                         return {
                             "missed_points": llm_response.missed_points,
+                            "missed_themes": llm_response.missed_themes,
                             "num_missed": llm_response.num_missed,
                             "sequence_followed": llm_response.sequence_followed,
                             "summary_missed_things": llm_response.summary_missed_things,
@@ -275,6 +377,7 @@ Return your analysis using the required JSON schema."""
             # All retries failed
             return {
                 "missed_points": [f"Analysis failed: {last_error}"],
+                "missed_themes": [],
                 "num_missed": 0,
                 "sequence_followed": "Unknown",
                 "summary_missed_things": "Analysis could not be completed",
@@ -320,6 +423,7 @@ Return your analysis using the required JSON schema."""
         if not transcript or not transcript.strip():
             return AnalysisResult(
                 missed_points=["No transcript provided"],
+                missed_themes=[],
                 num_missed=0,
                 sequence_followed="N/A",
                 summary_missed_things="Empty transcript - unable to analyze",
@@ -334,6 +438,7 @@ Return your analysis using the required JSON schema."""
                 "transcript_id": None,
                 "agent_name": None,
                 "missed_points": [],
+                "missed_themes": [],
                 "num_missed": 0,
                 "sequence_followed": "",
                 "summary_missed_things": "",
@@ -346,6 +451,7 @@ Return your analysis using the required JSON schema."""
             
             return AnalysisResult(
                 missed_points=output.get("missed_points", []),
+                missed_themes=output.get("missed_themes", []),
                 num_missed=output.get("num_missed", 0),
                 sequence_followed=output.get("sequence_followed", "Unknown"),
                 summary_missed_things=output.get("summary_missed_things", "Analysis completed"),
@@ -358,6 +464,7 @@ Return your analysis using the required JSON schema."""
             logger.error(f"Workflow execution failed: {e}")
             return AnalysisResult(
                 missed_points=[f"Analysis failed: {str(e)}"],
+                missed_themes=[],
                 num_missed=0,
                 sequence_followed="Unknown",
                 summary_missed_things="Analysis could not be completed",
