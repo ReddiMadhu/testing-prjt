@@ -9,6 +9,7 @@ import time
 import logging
 from typing import Dict, List, Optional, Any, TypedDict
 from dataclasses import dataclass
+from pathlib import Path
 from pydantic import BaseModel, Field
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -16,7 +17,7 @@ from langgraph.graph import StateGraph, END, START
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
-from config.settings import Settings, SeverityLevel
+from config.settings import Settings
 
 
 # Configure logging
@@ -27,23 +28,29 @@ logger = logging.getLogger(__name__)
 # --- Data Models ---
 class SOPAnalysis(BaseModel):
     """Structured output model for SOP compliance analysis"""
-    missing_elements: List[str] = Field(
-        description="List of SOP elements that were missed or inadequately addressed in the transcript"
+    missed_points: List[str] = Field(
+        description="List of SOP elements/points that were missed or inadequately addressed in the transcript"
     )
-    severity: str = Field(
-        description="Severity level: High, Medium, or Low based on impact on claim processing"
+    num_missed: int = Field(
+        description="Total count of missed points"
     )
-    summary: str = Field(
-        description="Brief 1-2 sentence summary of the main compliance issues found"
+    sequence_followed: str = Field(
+        description="Whether the proper SOP sequence was followed: 'Yes' or 'No'"
+    )
+    summary_missed_things: str = Field(
+        description="Brief summary of what was missed and why it matters for claim processing"
     )
 
 
 class AnalysisState(TypedDict):
     """State definition for LangGraph workflow"""
     transcript: str
-    missing_elements: List[str]
-    severity: str
-    summary: str
+    transcript_id: Optional[str]
+    agent_name: Optional[str]
+    missed_points: List[str]
+    num_missed: int
+    sequence_followed: str
+    summary_missed_things: str
     success: bool
     error_message: Optional[str]
 
@@ -51,9 +58,12 @@ class AnalysisState(TypedDict):
 @dataclass
 class AnalysisResult:
     """Data class for analysis results"""
-    missing_elements: List[str]
-    severity: str
-    summary: str
+    missed_points: List[str]
+    num_missed: int
+    sequence_followed: str
+    summary_missed_things: str
+    transcript_id: Optional[str] = None
+    agent_name: Optional[str] = None
     raw_response: Optional[str] = None
     success: bool = True
     error_message: Optional[str] = None
@@ -64,6 +74,9 @@ class LangChainGeminiService:
     Service class for interacting with Google Gemini API using LangChain and LangGraph
     Implements retry logic, rate limiting, and comprehensive error handling
     """
+    
+    # SOP file path relative to project root
+    SOP_FILE_PATH = "../SOP.txt"
     
     def __init__(self, api_key: Optional[str] = None):
         """
@@ -87,11 +100,49 @@ class LangChainGeminiService:
         if not self.api_key:
             raise ValueError("Missing Google API key. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable")
         
+        # Load SOP content
+        self._sop_content = self._load_sop_file()
+        
         # Initialize LLM
         self._setup_llm()
         
         # Build the LangGraph workflow
         self._build_workflow()
+    
+    def _load_sop_file(self) -> str:
+        """
+        Load the SOP file content from disk
+        
+        Returns:
+            String content of the SOP file
+        """
+        try:
+            # Try multiple potential paths
+            potential_paths = [
+                Path(__file__).parent.parent / self.SOP_FILE_PATH,  # Project root
+                Path.cwd() / self.SOP_FILE_PATH,  # Current working directory
+                Path(__file__).parent / self.SOP_FILE_PATH,  # Services folder
+            ]
+            
+            for sop_path in potential_paths:
+                if sop_path.exists():
+                    with open(sop_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    logger.info(f"Loaded SOP file from: {sop_path}")
+                    return content
+            
+            # If no file found, log warning and return default checklist
+            logger.warning(f"SOP file not found in expected locations. Using default checklist.")
+            return self._get_default_sop_checklist()
+            
+        except Exception as e:
+            logger.error(f"Error loading SOP file: {e}")
+            return self._get_default_sop_checklist()
+    
+    def _get_default_sop_checklist(self) -> str:
+        """Get default SOP checklist from settings as fallback"""
+        sop_elements = self.settings.get_sop_elements_list()
+        return "\n".join([f"{i+1}. {elem}" for i, elem in enumerate(sop_elements)])
     
     def _setup_llm(self):
         """Setup LangChain LLM with structured output"""
@@ -106,11 +157,14 @@ class LangChainGeminiService:
         except Exception as e:
             logger.error(f"Failed to setup LLM: {e}")
             raise
-    
     def _get_sop_checklist(self) -> str:
         """Get formatted SOP checklist from settings"""
         sop_elements = self.settings.get_sop_elements_list()
         return "\n".join([f"{i+1}. {elem}" for i, elem in enumerate(sop_elements)])
+    
+    def _get_sop_content(self) -> str:
+        """Get the loaded SOP content for use in prompts"""
+        return self._sop_content
     
     def _build_analysis_prompt(self) -> ChatPromptTemplate:
         """Build the analysis prompt template for FNOL transcript analysis"""
@@ -120,26 +174,35 @@ class LangChainGeminiService:
             ("system", 
              """You are an expert insurance compliance analyst specializing in FNOL (First Notice of Loss) call quality assessment.
 
-Analyze the provided FNOL call transcript between an AI voice agent and an insurance holder. Identify ALL missing or inadequate elements according to standard FNOL SOP requirements.
+You will analyze the provided FNOL call transcript between an AI voice agent/human agent and an insurance holder. Your task is to evaluate compliance against the official SOP document provided below.
+
+=== OFFICIAL SOP DOCUMENT ===
+{sop_document}
+=== END OF SOP DOCUMENT ===
 
 EVALUATION CRITERIA:
-- Mark an element as "missing" if it was not addressed at all in the conversation
-- Mark an element as "inadequate" if it was partially addressed but lacks important details
-- Consider the severity based on how critical the missing information is for claim processing
+Based on the SOP document above, evaluate the transcript for:
+{checklist}
+1. **missed_points**: Identify ALL elements from the SOP that were missed or inadequately addressed. Reference the specific Data IDs (e.g., [ID-1], [ID-2], etc.) and phase requirements:
+   - Phase 1: Initiation & Verification (Greeting, Safety Check, Policyholder Verification [ID-1])
+   - Phase 2: Incident Details (Datetime/Location [ID-2], Description [ID-3], Property Damage [ID-6])
+   - Phase 3: Liability & Legal (Injuries [ID-5], Parties Involved [ID-4], Witnesses [ID-8], Police Report [ID-7])
+   - Phase 4: Closing (Documentation [ID-9], Claim Number [ID-11], Next Steps [ID-10])
+   - Core Behavioral Guidelines: Tone Protocol [ID-12], Safety First, Active Listening, No Hallucinations
 
-SEVERITY GUIDELINES:
-- High: Missing critical information that would prevent claim processing (policyholder verification, incident details, claim number)
-- Medium: Missing important but supplementary information (witness details, photos, police report)
-- Low: Minor omissions that don't significantly impact claim processing
+2. **num_missed**: Count the total number of missed points
+
+3. **sequence_followed**: Determine if the agent followed the proper SOP sequence:
+   - 'Yes' if the call followed: Phase 1 → Phase 2 → Phase 3 → Phase 4
+   - 'No' if major phases were out of order or critical steps were skipped
+
+4. **summary_missed_things**: Provide a brief summary explaining what was missed and the impact on claim processing
 
 Return your analysis using the required JSON schema."""
             ),
             ("human", 
-             """Transcript:
+             """Transcript to Analyze:
 {transcript}
-
-SOP Checklist (Required Elements to Evaluate):
-{checklist}
 
 {format_instructions}"""
             )
@@ -156,9 +219,10 @@ SOP Checklist (Required Elements to Evaluate):
             
             if not transcript or not transcript.strip():
                 return {
-                    "missing_elements": ["No transcript provided"],
-                    "severity": SeverityLevel.NA.value,
-                    "summary": "Empty transcript - unable to analyze",
+                    "missed_points": ["No transcript provided"],
+                    "num_missed": 0,
+                    "sequence_followed": "N/A",
+                    "summary_missed_things": "Empty transcript - unable to analyze",
                     "success": False,
                     "error_message": "Empty transcript"
                 }
@@ -166,8 +230,9 @@ SOP Checklist (Required Elements to Evaluate):
             prompt_template, parser = self._build_analysis_prompt()
             
             formatted_prompt = prompt_template.format(
-                transcript=transcript,
+                sop_document=self._get_sop_content(),
                 checklist=self._get_sop_checklist(),
+                transcript=transcript,
                 format_instructions=parser.get_format_instructions()
             )
             
@@ -186,9 +251,10 @@ SOP Checklist (Required Elements to Evaluate):
                     
                     if llm_response:
                         return {
-                            "missing_elements": llm_response.missing_elements,
-                            "severity": llm_response.severity,
-                            "summary": llm_response.summary,
+                            "missed_points": llm_response.missed_points,
+                            "num_missed": llm_response.num_missed,
+                            "sequence_followed": llm_response.sequence_followed,
+                            "summary_missed_things": llm_response.summary_missed_things,
                             "success": True,
                             "error_message": None
                         }
@@ -207,9 +273,10 @@ SOP Checklist (Required Elements to Evaluate):
             
             # All retries failed
             return {
-                "missing_elements": [f"Analysis failed: {last_error}"],
-                "severity": SeverityLevel.UNKNOWN.value,
-                "summary": "Analysis could not be completed",
+                "missed_points": [f"Analysis failed: {last_error}"],
+                "num_missed": 0,
+                "sequence_followed": "Unknown",
+                "summary_missed_things": "Analysis could not be completed",
                 "success": False,
                 "error_message": last_error
             }
@@ -242,9 +309,10 @@ SOP Checklist (Required Elements to Evaluate):
         """
         if not transcript or not transcript.strip():
             return AnalysisResult(
-                missing_elements=["No transcript provided"],
-                severity=SeverityLevel.NA.value,
-                summary="Empty transcript - unable to analyze",
+                missed_points=["No transcript provided"],
+                num_missed=0,
+                sequence_followed="N/A",
+                summary_missed_things="Empty transcript - unable to analyze",
                 success=False,
                 error_message="Empty transcript"
             )
@@ -253,9 +321,12 @@ SOP Checklist (Required Elements to Evaluate):
             # Initialize state
             initial_state: AnalysisState = {
                 "transcript": transcript,
-                "missing_elements": [],
-                "severity": "",
-                "summary": "",
+                "transcript_id": None,
+                "agent_name": None,
+                "missed_points": [],
+                "num_missed": 0,
+                "sequence_followed": "",
+                "summary_missed_things": "",
                 "success": False,
                 "error_message": None
             }
@@ -264,9 +335,10 @@ SOP Checklist (Required Elements to Evaluate):
             output = self.workflow.invoke(initial_state)
             
             return AnalysisResult(
-                missing_elements=output.get("missing_elements", []),
-                severity=output.get("severity", SeverityLevel.UNKNOWN.value),
-                summary=output.get("summary", "Analysis completed"),
+                missed_points=output.get("missed_points", []),
+                num_missed=output.get("num_missed", 0),
+                sequence_followed=output.get("sequence_followed", "Unknown"),
+                summary_missed_things=output.get("summary_missed_things", "Analysis completed"),
                 raw_response=str(output),
                 success=output.get("success", False),
                 error_message=output.get("error_message")
@@ -275,9 +347,10 @@ SOP Checklist (Required Elements to Evaluate):
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}")
             return AnalysisResult(
-                missing_elements=[f"Analysis failed: {str(e)}"],
-                severity=SeverityLevel.UNKNOWN.value,
-                summary="Analysis could not be completed",
+                missed_points=[f"Analysis failed: {str(e)}"],
+                num_missed=0,
+                sequence_followed="Unknown",
+                summary_missed_things="Analysis could not be completed",
                 success=False,
                 error_message=str(e)
             )

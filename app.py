@@ -114,14 +114,18 @@ def handle_file_upload(uploaded_file):
     # Show warnings if any
     for warning in validation.warnings + df_validation.warnings:
         st.warning(f"⚠️ {warning}")
-    
+
+    render_file_success(file_info)
+
     return df, file_info, None
 
 
 def process_transcripts(
     df: pd.DataFrame,
     transcript_column: str,
-    num_rows: int
+    num_rows: int,
+    transcript_id_column: str = None,
+    agent_name_column: str = None
 ) -> pd.DataFrame:
     """
     Process transcripts and return results DataFrame
@@ -130,6 +134,8 @@ def process_transcripts(
         df: Source DataFrame
         transcript_column: Column containing transcripts
         num_rows: Number of rows to process
+        transcript_id_column: Column containing transcript IDs (optional)
+        agent_name_column: Column containing agent names (optional)
         
     Returns:
         DataFrame with analysis results
@@ -151,6 +157,10 @@ def process_transcripts(
         row = df.iloc[idx]
         transcript = str(row[transcript_column]) if pd.notna(row[transcript_column]) else ""
         
+        # Extract transcript_id and agent_name from Excel if columns are provided
+        transcript_id = str(row[transcript_id_column]) if transcript_id_column and pd.notna(row.get(transcript_id_column)) else f"T{idx+1}"
+        agent_name = str(row[agent_name_column]) if agent_name_column and pd.notna(row.get(agent_name_column)) else "Unknown"
+        
         # Update status
         elapsed = time.time() - start_time
         status_container.markdown(f"""
@@ -161,7 +171,7 @@ def process_transcripts(
             border-left: 4px solid #E85D04;
         ">
             <p style="margin: 0; font-weight: 600; color: #E85D04;">
-                🔄 Processing transcript {idx + 1} of {num_rows}
+                🔄 Processing transcript {idx + 1} of {num_rows} (ID: {transcript_id})
             </p>
             <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;">
                 Elapsed: {format_duration(elapsed)} | 
@@ -177,18 +187,24 @@ def process_transcripts(
             result = llm_service.analyze_transcript(transcript)
             
             new_row = row.to_dict()
-            new_row['Missing_Elements'] = "; ".join(result.missing_elements)
-            new_row['Compliance_Severity'] = result.severity
-            new_row['Analysis_Summary'] = result.summary
+            new_row['Transcript_ID'] = transcript_id
+            new_row['Agent_Name'] = agent_name
+            new_row['Missed_Points'] = "; ".join(result.missed_points)
+            new_row['Num_Missed'] = result.num_missed
+            new_row['Sequence_Followed'] = result.sequence_followed
+            new_row['Summary_Missed_Things'] = result.summary_missed_things
             processed_rows.append(new_row)
             
             if result.success:
                 success_count += 1
         else:
             new_row = row.to_dict()
-            new_row['Missing_Elements'] = transcript_validation.message
-            new_row['Compliance_Severity'] = "N/A"
-            new_row['Analysis_Summary'] = "Invalid transcript"
+            new_row['Transcript_ID'] = transcript_id
+            new_row['Agent_Name'] = agent_name
+            new_row['Missed_Points'] = transcript_validation.message
+            new_row['Num_Missed'] = 0
+            new_row['Sequence_Followed'] = "N/A"
+            new_row['Summary_Missed_Things'] = "Invalid transcript"
             processed_rows.append(new_row)
         
         # Update progress
@@ -229,21 +245,24 @@ def render_processing_section(df: pd.DataFrame):
     <div class="info-box">
         <h4 style="color: #D84E00 !important; margin: 0 0 0.5rem 0;">Processing Information</h4>
         <p style="margin: 0; color: #1A1A2E;">
-            The AI will analyze each transcript for SOP compliance and identify missing elements.
-            Processing time depends on the number of transcripts (approximately 3-5 seconds per transcript).
+            The AI will analyze each transcript for SOP compliance and identify missed points, 
+            sequence compliance, and provide a summary. Processing time depends on the number 
+            of transcripts (approximately 3-5 seconds per transcript).
         </p>
     </div>
     """, unsafe_allow_html=True)
     
     # Column selection
     file_service = FileService()
+    columns = df.columns.tolist()
+    columns_with_none = ["(None - Auto-generate)"] + columns
     
+    # Row 1: Transcript column and number of rows
     col1, col2 = st.columns([2, 1])
     
     with col1:
         # Find likely transcript column
         suggested_col = file_service.find_transcript_column(df)
-        columns = df.columns.tolist()
         default_idx = columns.index(suggested_col) if suggested_col and suggested_col in columns else 0
         
         selected_transcript_col = st.selectbox(
@@ -263,6 +282,40 @@ def render_processing_section(df: pd.DataFrame):
             help=f"Select number of transcripts to analyze (max {max_rows})"
         )
     
+    # Row 2: Transcript ID and Agent Name columns
+    st.markdown("##### Optional: Map Excel Columns")
+    col3, col4 = st.columns(2)
+    
+    with col3:
+        # Find likely transcript_id column
+        id_col_idx = 0
+        for i, col in enumerate(columns):
+            if 'transcript_id' in col.lower() or 'id' in col.lower():
+                id_col_idx = i + 1  # +1 because of "(None - Auto-generate)" option
+                break
+        
+        selected_transcript_id_col = st.selectbox(
+            "Transcript ID column:",
+            columns_with_none,
+            index=id_col_idx,
+            help="Column containing transcript IDs (optional - will auto-generate if not selected)"
+        )
+    
+    with col4:
+        # Find likely agent_name column
+        agent_col_idx = 0
+        for i, col in enumerate(columns):
+            if 'agent' in col.lower() or 'name' in col.lower():
+                agent_col_idx = i + 1  # +1 because of "(None - Auto-generate)" option
+                break
+        
+        selected_agent_name_col = st.selectbox(
+            "Agent Name column:",
+            columns_with_none,
+            index=agent_col_idx,
+            help="Column containing agent names - AI bot or human (optional)"
+        )
+    
     # Process button
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -270,7 +323,17 @@ def render_processing_section(df: pd.DataFrame):
     with col2:
         if st.button("Start Analysis", type="primary", use_container_width=True):
             with st.spinner("Initializing analysis..."):
-                processed_df = process_transcripts(df, selected_transcript_col, num_rows)
+                # Handle "None" selections
+                transcript_id_col = None if selected_transcript_id_col == "(None - Auto-generate)" else selected_transcript_id_col
+                agent_name_col = None if selected_agent_name_col == "(None - Auto-generate)" else selected_agent_name_col
+                
+                processed_df = process_transcripts(
+                    df, 
+                    selected_transcript_col, 
+                    num_rows,
+                    transcript_id_column=transcript_id_col,
+                    agent_name_column=agent_name_col
+                )
                 st.session_state.processed_data = processed_df
                 st.session_state.processing_complete = True
                 time.sleep(1)
@@ -318,7 +381,7 @@ def render_download_section(processed_df: pd.DataFrame):
     
     with col3:
         # Reset button
-        if st.button("New Analysis", use_container_width=True):
+        if st.button("Further Analysis", use_container_width=True):
             reset_session_state()
             st.rerun()
 
@@ -338,8 +401,17 @@ def main():
     # Render main header
     # render_header()
     
-    # File Upload Section
-    render_section_header("Upload Transcript File", "📁")
+    # File Upload Section with Clear button
+    col_header, col_clear = st.columns([6, 1])
+    
+    with col_header:
+        render_section_header("Upload Transcript File", "📁")
+    
+    with col_clear:
+        st.markdown("<div style='height: 2.5rem;'></div>", unsafe_allow_html=True)  # Spacer for alignment
+        if st.button("🗑️ Clear All", type="secondary", use_container_width=True, help="Clear all data and start fresh"):
+            reset_session_state()
+            st.rerun()
     
     uploaded_file = render_file_uploader()
     
@@ -350,6 +422,7 @@ def main():
             
             if error:
                 render_file_error(error)
+                st.stop()  # Stop execution if there's an error
             else:
                 st.session_state.data = df
                 st.session_state.file_info = file_info
@@ -357,7 +430,6 @@ def main():
         
         # Display file info and data
         if st.session_state.data is not None and st.session_state.file_info is not None:
-            render_file_success(st.session_state.file_info)
             render_file_metrics(st.session_state.file_info)
             
             st.markdown("---")

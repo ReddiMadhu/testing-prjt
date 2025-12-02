@@ -59,7 +59,6 @@ def render_section_header(title: str, icon: str = "📌"):
         gap: 0.75rem;
         margin: 2rem 0 1rem 0;
         padding-bottom: 0.75rem;
-        border-bottom: 3px solid #E85D04;
     ">
         <span style="font-size: 1.5rem;">{icon}</span>
         <h2 style="

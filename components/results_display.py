@@ -55,16 +55,19 @@ def render_results_summary(processed_df: pd.DataFrame):
         processed_df: DataFrame containing processed results
     """
     
-    severity_counts = processed_df['Compliance_Severity'].value_counts()
-    
     total = len(processed_df)
-    high_count = severity_counts.get('High', 0)
-    medium_count = severity_counts.get('Medium', 0)
-    low_count = severity_counts.get('Low', 0)
     
-    # Calculate compliance rate
-    compliant = low_count
-    compliance_rate = (compliant / total * 100) if total > 0 else 0
+    # Calculate metrics based on new format
+    total_missed = processed_df['Num_Missed'].sum() if 'Num_Missed' in processed_df.columns else 0
+    avg_missed = processed_df['Num_Missed'].mean() if 'Num_Missed' in processed_df.columns else 0
+    
+    # Sequence followed counts
+    sequence_counts = processed_df['Sequence_Followed'].value_counts() if 'Sequence_Followed' in processed_df.columns else pd.Series()
+    seq_yes = sequence_counts.get('Yes', 0)
+    seq_no = sequence_counts.get('No', 0)
+    
+    # Calculate compliance rate (based on sequence followed)
+    compliance_rate = (seq_yes / total * 100) if total > 0 else 0
     
     col1, col2, col3, col4, col5 = st.columns(5)
     
@@ -94,15 +97,14 @@ def render_results_summary(processed_df: pd.DataFrame):
             text-align: center;
             border-top: 4px solid #C62828;
         ">
-            <p style="color: #666; margin: 0; font-size: 0.85rem; font-weight: 600;">HIGH SEVERITY</p>
-            <h2 style="color: #C62828; margin: 0.5rem 0 0 0; font-size: 2rem;">{high_count}</h2>
-            <p style="color: {'#C62828' if high_count > 0 else '#666'}; margin: 0.25rem 0 0 0; font-size: 0.8rem;">
-                {'⚠️ Needs Review' if high_count > 0 else '✓ None'}
-            </p>
+            <p style="color: #666; margin: 0; font-size: 0.85rem; font-weight: 600;">TOTAL MISSED</p>
+            <h2 style="color: #C62828; margin: 0.5rem 0 0 0; font-size: 2rem;">{int(total_missed)}</h2>
+            <p style="color: #666; margin: 0.25rem 0 0 0; font-size: 0.8rem;">Points Across All</p>
         </div>
         """, unsafe_allow_html=True)
     
     with col3:
+        avg_color = "#2E7D32" if avg_missed <= 2 else "#F9A825" if avg_missed <= 4 else "#C62828"
         st.markdown(f"""
         <div style="
             background: white;
@@ -110,15 +112,16 @@ def render_results_summary(processed_df: pd.DataFrame):
             border-radius: 12px;
             box-shadow: 0 2px 12px rgba(0,0,0,0.08);
             text-align: center;
-            border-top: 4px solid #F9A825;
+            border-top: 4px solid {avg_color};
         ">
-            <p style="color: #666; margin: 0; font-size: 0.85rem; font-weight: 600;">MEDIUM SEVERITY</p>
-            <h2 style="color: #F9A825; margin: 0.5rem 0 0 0; font-size: 2rem;">{medium_count}</h2>
-            <p style="color: #666; margin: 0.25rem 0 0 0; font-size: 0.8rem;">Moderate Issues</p>
+            <p style="color: #666; margin: 0; font-size: 0.85rem; font-weight: 600;">AVG MISSED</p>
+            <h2 style="color: {avg_color}; margin: 0.5rem 0 0 0; font-size: 2rem;">{avg_missed:.1f}</h2>
+            <p style="color: #666; margin: 0.25rem 0 0 0; font-size: 0.8rem;">Per Transcript</p>
         </div>
         """, unsafe_allow_html=True)
     
     with col4:
+        seq_color = "#2E7D32" if seq_yes > seq_no else "#C62828"
         st.markdown(f"""
         <div style="
             background: white;
@@ -126,11 +129,11 @@ def render_results_summary(processed_df: pd.DataFrame):
             border-radius: 12px;
             box-shadow: 0 2px 12px rgba(0,0,0,0.08);
             text-align: center;
-            border-top: 4px solid #2E7D32;
+            border-top: 4px solid {seq_color};
         ">
-            <p style="color: #666; margin: 0; font-size: 0.85rem; font-weight: 600;">LOW SEVERITY</p>
-            <h2 style="color: #2E7D32; margin: 0.5rem 0 0 0; font-size: 2rem;">{low_count}</h2>
-            <p style="color: #2E7D32; margin: 0.25rem 0 0 0; font-size: 0.8rem;">✓ Minor Issues</p>
+            <p style="color: #666; margin: 0; font-size: 0.85rem; font-weight: 600;">SEQUENCE</p>
+            <h2 style="color: {seq_color}; margin: 0.5rem 0 0 0; font-size: 2rem;">{seq_yes}/{total}</h2>
+            <p style="color: #666; margin: 0.25rem 0 0 0; font-size: 0.8rem;">Followed SOP</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -166,43 +169,52 @@ def render_results_table(processed_df: pd.DataFrame):
     </h3>
     """, unsafe_allow_html=True)
     
-    # Severity filter
-    severity_options = ['All'] + processed_df['Compliance_Severity'].unique().tolist()
-    selected_severity = st.selectbox(
-        "Filter by Severity:",
-        severity_options,
+    # Sequence filter
+    filter_options = ['All'] + processed_df['Sequence_Followed'].unique().tolist() if 'Sequence_Followed' in processed_df.columns else ['All']
+    selected_filter = st.selectbox(
+        "Filter by Sequence Followed:",
+        filter_options,
         index=0
     )
     
     # Filter data
-    if selected_severity != 'All':
-        display_df = processed_df[processed_df['Compliance_Severity'] == selected_severity]
+    if selected_filter != 'All':
+        display_df = processed_df[processed_df['Sequence_Followed'] == selected_filter]
     else:
         display_df = processed_df
     
-    # Prepare display columns
-    display_cols = ['Missing_Elements', 'Compliance_Severity', 'Analysis_Summary']
+    # Prepare display columns with new format
+    display_cols = ['Transcript_ID', 'Agent_Name', 'Missed_Points', 'Num_Missed', 'Sequence_Followed', 'Summary_Missed_Things']
     
-    # Add ID column if exists
-    id_cols = [col for col in processed_df.columns if 'id' in col.lower()]
-    if id_cols:
-        display_cols = [id_cols[0]] + display_cols
+    # Filter to only include columns that exist in the dataframe
+    display_cols = [col for col in display_cols if col in processed_df.columns]
     
     # Style the dataframe
-    def style_severity(val):
-        if val == 'High':
-            return 'background-color: #FFEBEE; color: #C62828; font-weight: bold;'
-        elif val == 'Medium':
-            return 'background-color: #FFF8E1; color: #F57F17; font-weight: bold;'
-        elif val == 'Low':
+    def style_sequence(val):
+        if val == 'Yes':
             return 'background-color: #E8F5E9; color: #2E7D32; font-weight: bold;'
+        elif val == 'No':
+            return 'background-color: #FFEBEE; color: #C62828; font-weight: bold;'
         return ''
     
+    def style_num_missed(val):
+        try:
+            num = int(val)
+            if num == 0:
+                return 'background-color: #E8F5E9; color: #2E7D32; font-weight: bold;'
+            elif num <= 2:
+                return 'background-color: #FFF8E1; color: #F57F17; font-weight: bold;'
+            else:
+                return 'background-color: #FFEBEE; color: #C62828; font-weight: bold;'
+        except:
+            return ''
+    
     # Apply styling
-    styled_df = display_df[display_cols].style.applymap(
-        style_severity, 
-        subset=['Compliance_Severity']
-    )
+    styled_df = display_df[display_cols].style
+    if 'Sequence_Followed' in display_cols:
+        styled_df = styled_df.applymap(style_sequence, subset=['Sequence_Followed'])
+    if 'Num_Missed' in display_cols:
+        styled_df = styled_df.applymap(style_num_missed, subset=['Num_Missed'])
     
     st.dataframe(
         styled_df,
@@ -216,29 +228,31 @@ def render_results_table(processed_df: pd.DataFrame):
 
 def render_individual_result(
     index: int,
-    severity: str,
-    missing_elements: str,
-    summary: str,
-    transcript_id: Optional[str] = None
+    sequence_followed: str,
+    missed_points: str,
+    num_missed: int,
+    summary_missed_things: str,
+    transcript_id: Optional[str] = None,
+    agent_name: Optional[str] = None
 ):
     """
     Render an individual result card
     
     Args:
         index: Result index
-        severity: Severity level
-        missing_elements: Missing elements string
-        summary: Analysis summary
+        sequence_followed: Whether SOP sequence was followed (Yes/No)
+        missed_points: Missed points string
+        num_missed: Number of missed points
+        summary_missed_things: Summary of missed things
         transcript_id: Optional transcript ID
+        agent_name: Optional agent name
     """
     
-    severity_colors = {
-        'High': ('#C62828', '#FFEBEE'),
-        'Medium': ('#F57F17', '#FFF8E1'),
-        'Low': ('#2E7D32', '#E8F5E9')
-    }
-    
-    color, bg_color = severity_colors.get(severity, ('#666', '#F5F5F5'))
+    # Color based on sequence followed
+    if sequence_followed == 'Yes':
+        color, bg_color = '#2E7D32', '#E8F5E9'
+    else:
+        color, bg_color = '#C62828', '#FFEBEE'
     
     st.markdown(f"""
     <div style="
@@ -250,22 +264,33 @@ def render_individual_result(
     ">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
             <span style="font-weight: 600; color: #1A1A2E;">
-                {f'ID: {transcript_id}' if transcript_id else f'Record #{index + 1}'}
+                {f'ID: {transcript_id}' if transcript_id else f'Record #{index + 1}'} 
+                {f'| Agent: {agent_name}' if agent_name else ''}
             </span>
-            <span style="
-                background: {color};
-                color: white;
-                padding: 0.25rem 0.75rem;
-                border-radius: 20px;
-                font-size: 0.8rem;
-                font-weight: 600;
-            ">{severity}</span>
+            <div style="display: flex; gap: 0.5rem;">
+                <span style="
+                    background: {color};
+                    color: white;
+                    padding: 0.25rem 0.75rem;
+                    border-radius: 20px;
+                    font-size: 0.8rem;
+                    font-weight: 600;
+                ">Sequence: {sequence_followed}</span>
+                <span style="
+                    background: {'#C62828' if num_missed > 2 else '#F9A825' if num_missed > 0 else '#2E7D32'};
+                    color: white;
+                    padding: 0.25rem 0.75rem;
+                    border-radius: 20px;
+                    font-size: 0.8rem;
+                    font-weight: 600;
+                ">Missed: {num_missed}</span>
+            </div>
         </div>
         <p style="margin: 0.5rem 0; color: #1A1A2E; font-size: 0.9rem;">
-            <strong>Missing Elements:</strong> {missing_elements}
+            <strong>Missed Points:</strong> {missed_points}
         </p>
         <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.85rem;">
-            <strong>Summary:</strong> {summary}
+            <strong>Summary:</strong> {summary_missed_things}
         </p>
     </div>
     """, unsafe_allow_html=True)
