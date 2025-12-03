@@ -18,7 +18,7 @@ from config.theme import EXLTheme
 from services.llm_factory import get_llm_service
 from services.file_service import FileService
 from services.analytics_service import AnalyticsService
-from services.transcript_analysis_graph import TranscriptAnalysisService
+from services.final_transcript import FinalTranscriptAnalysis
 
 # Components
 from components.sidebar import render_sidebar
@@ -140,10 +140,11 @@ def process_transcripts(
     transcript_column: str,
     num_rows: int,
     transcript_id_column: str = None,
-    agent_name_column: str = None
+    agent_name_column: str = None,
+    agent_id_column: str = None
 ) -> pd.DataFrame:
     """
-    Process transcripts and return results DataFrame
+    Process transcripts using FinalTranscriptAnalysis LangGraph service
     
     Args:
         df: Source DataFrame
@@ -151,111 +152,95 @@ def process_transcripts(
         num_rows: Number of rows to process
         transcript_id_column: Column containing transcript IDs (optional)
         agent_name_column: Column containing agent names (optional)
+        agent_id_column: Column containing agent IDs (optional)
         
     Returns:
         DataFrame with analysis results
     """
-    # Get provider from session state or default
-    provider = st.session_state.get('llm_provider')
-    llm_service = get_llm_service(provider)
+    # Prepare DataFrame for analysis
+    analysis_df = df.head(num_rows).copy()
     
-    # Progress indicators
-    progress_bar = st.progress(0)
+    # Map columns to expected format
+    column_mapping = {}
+    
+    # Map transcript column
+    if transcript_column:
+        column_mapping[transcript_column] = 'Transcript_Call'
+    
+    # Map transcript_id column
+    if transcript_id_column and transcript_id_column != "(None - Auto-generate)":
+        column_mapping[transcript_id_column] = 'Transcript_ID'
+    else:
+        analysis_df['Transcript_ID'] = [f"T{i+1}" for i in range(len(analysis_df))]
+    
+    # Map agent_name column
+    if agent_name_column and agent_name_column != "(None - Auto-generate)":
+        column_mapping[agent_name_column] = 'Agent_Name'
+    else:
+        analysis_df['Agent_Name'] = "Unknown"
+    
+    # Map agent_id column
+    if agent_id_column and agent_id_column != "(None - Auto-generate)":
+        column_mapping[agent_id_column] = 'Agent_ID'
+    else:
+        analysis_df['Agent_ID'] = [f"A{i+1}" for i in range(len(analysis_df))]
+    
+    # Apply column mapping
+    analysis_df = analysis_df.rename(columns=column_mapping)
+    
+    # Show progress
     status_container = st.empty()
-    metrics_container = st.container()
-    
-    processed_rows = []
-    start_time = time.time()
-    success_count = 0
-    
-    for idx in range(min(num_rows, len(df))):
-        row = df.iloc[idx]
-        transcript = str(row[transcript_column]) if pd.notna(row[transcript_column]) else ""
-        
-        # Extract transcript_id and agent_name from Excel if columns are provided
-        transcript_id = str(row[transcript_id_column]) if transcript_id_column and pd.notna(row.get(transcript_id_column)) else f"T{idx+1}"
-        agent_name = str(row[agent_name_column]) if agent_name_column and pd.notna(row.get(agent_name_column)) else "Unknown"
-        
-        # Update status
-        elapsed = time.time() - start_time
-        status_container.markdown(f"""
-        <div style="
-            background: #FFF8F0;
-            padding: 1rem;
-            border-radius: 8px;
-            border-left: 4px solid #E85D04;
-        ">
-            <p style="margin: 0; font-weight: 600; color: #E85D04;">
-                Processing transcript {idx + 1} of {num_rows} (ID: {transcript_id})
-            </p>
-            <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;">
-                Elapsed: {format_duration(elapsed)} | 
-                Success rate: {(success_count / (idx + 1) * 100) if idx > 0 else 0:.1f}%
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Validate and analyze
-        transcript_validation = validate_transcript_content(transcript)
-        
-        if transcript_validation.is_valid:
-            result = llm_service.analyze_transcript(transcript)
-            
-            new_row = {
-                'Transcript_ID': transcript_id,
-                'Agent_Name': agent_name,
-                'Transcript_Call': transcript,
-                'Missed_Points': "; ".join(result.missed_points),
-                'Missed_Themes': "; ".join(result.missed_themes),
-                'Num_Missed': result.num_missed,
-                'Sequence_Followed': result.sequence_followed,
-                'Summary_Missed_Things': result.summary_missed_things
-            }
-            processed_rows.append(new_row)
-            
-            if result.success:
-                success_count += 1
-        else:
-            new_row = {
-                'Transcript_ID': transcript_id,
-                'Agent_Name': agent_name,
-                'Transcript_Call': transcript,
-                'Missed_Points': transcript_validation.message,
-                'Missed_Themes': "",
-                'Num_Missed': 0,
-                'Sequence_Followed': "N/A",
-                'Summary_Missed_Things': "Invalid transcript"
-            }
-            processed_rows.append(new_row)
-        
-        # Update progress
-        progress_bar.progress((idx + 1) / num_rows)
-        
-        # Sleep between API calls to avoid rate limiting (except for last item)
-        if idx < num_rows - 1:
-            sleep_time = 0.5  # Configurable sleep time in seconds
-            time.sleep(sleep_time)
-    
-    # Clear status and show completion
-    total_time = time.time() - start_time
     status_container.markdown(f"""
     <div style="
-        background: #E8F5E9;
+        background: #FFF8F0;
         padding: 1rem;
         border-radius: 8px;
-        border-left: 4px solid #2E7D32;
+        border-left: 4px solid #E85D04;
     ">
-        <p style="margin: 0; font-weight: 600; color: #2E7D32;">
-            ✅ Processing Complete!
+        <p style="margin: 0; font-weight: 600; color: #E85D04;">
+            🔄 Running LangGraph Transcript Analysis...
         </p>
         <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;">
-            Processed {num_rows} transcripts in {format_duration(total_time)} | 
-            Success rate: {(success_count / num_rows * 100):.1f}%
+            Processing {num_rows} transcripts. This may take a few minutes.
         </p>
     </div>
     """, unsafe_allow_html=True)
     
-    return pd.DataFrame(processed_rows)
+    start_time = time.time()
+    
+    # Run FinalTranscriptAnalysis
+    try:
+        analyzer = FinalTranscriptAnalysis()
+        result = analyzer.analyze(analysis_df)
+        
+        if result["success"]:
+            output_df = analyzer.to_dataframe(result)
+            
+            total_time = time.time() - start_time
+            status_container.markdown(f"""
+            <div style="
+                background: #E8F5E9;
+                padding: 1rem;
+                border-radius: 8px;
+                border-left: 4px solid #2E7D32;
+            ">
+                <p style="margin: 0; font-weight: 600; color: #2E7D32;">
+                    ✅ Analysis Complete!
+                </p>
+                <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;">
+                    Processed {num_rows} transcripts in {format_duration(total_time)}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            return output_df
+        else:
+            st.error(f"Analysis failed: {result['error']}")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        st.error(f"Error during analysis: {str(e)}")
+        return pd.DataFrame()
 
 
 def render_processing_section(df: pd.DataFrame):
@@ -269,11 +254,11 @@ def render_processing_section(df: pd.DataFrame):
     
     st.markdown("""
     <div class="info-box">
-        <h4 style="color: #D84E00 !important; margin: 0 0 0.5rem 0;">Processing Information</h4>
+        <h4 style="color: #D84E00 !important; margin: 0 0 0.5rem 0;">LangGraph Transcript Analysis</h4>
         <p style="margin: 0; color: #1A1A2E;">
-            The AI will analyze each transcript for SOP compliance and identify missed points, 
-            sequence compliance, and provide a summary. Processing time depends on the number 
-            of transcripts (approximately 3-5 seconds per transcript).
+            The AI will analyze each transcript to identify mistakes, generate themes, 
+            determine root causes, calculate severity scores, and provide reasoning.
+            Processing time: approximately 5-10 seconds per transcript.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -288,16 +273,16 @@ def render_processing_section(df: pd.DataFrame):
     
     with col1:
         # Find likely transcript column
-        agent_col_idx = 0
+        transcript_col_idx = 0
         for i, col in enumerate(columns):
-            if 'transcript_call' in col.lower() or 'call' in col.lower():
-                agent_col_idx = i  
+            if 'transcript_call' in col.lower() or 'transcript' in col.lower() or 'call' in col.lower():
+                transcript_col_idx = i  
                 break
         
         selected_transcript_col = st.selectbox(
             "Select the transcript column:",
             columns,
-            index=agent_col_idx,
+            index=transcript_col_idx,
             help="Choose the column containing the call transcripts to analyze"
         )
     
@@ -311,38 +296,53 @@ def render_processing_section(df: pd.DataFrame):
             help=f"Select number of transcripts to analyze (max {max_rows})"
         )
     
-    # Row 2: Transcript ID and Agent Name columns
+    # Row 2: Transcript ID, Agent ID, Agent Name columns
     st.markdown("##### Optional: Map Excel Columns")
-    col3, col4 = st.columns(2)
+    col3, col4, col5 = st.columns(3)
     
     with col3:
         # Find likely transcript_id column
         id_col_idx = 0
         for i, col in enumerate(columns):
             if 'transcript_id' in col.lower() or 'id' in col.lower():
-                id_col_idx = i + 1  # +1 because of "(None - Auto-generate)" option
+                id_col_idx = i + 1
                 break
         
         selected_transcript_id_col = st.selectbox(
             "Transcript ID column:",
             columns_with_none,
             index=id_col_idx,
-            help="Column containing transcript IDs (optional - will auto-generate if not selected)"
+            help="Column containing transcript IDs (optional)"
         )
     
     with col4:
-        # Find likely agent_name column
-        agent_col_idx = 0
+        # Find likely agent_id column
+        agent_id_col_idx = 0
         for i, col in enumerate(columns):
-            if 'agent' in col.lower() or 'name' in col.lower():
-                agent_col_idx = i + 1  # +1 because of "(None - Auto-generate)" option
+            if 'agent_id' in col.lower():
+                agent_id_col_idx = i + 1
+                break
+        
+        selected_agent_id_col = st.selectbox(
+            "Agent ID column:",
+            columns_with_none,
+            index=agent_id_col_idx,
+            help="Column containing agent IDs (optional)"
+        )
+    
+    with col5:
+        # Find likely agent_name column
+        agent_name_col_idx = 0
+        for i, col in enumerate(columns):
+            if 'agent_name' in col.lower() or 'agent' in col.lower():
+                agent_name_col_idx = i + 1
                 break
         
         selected_agent_name_col = st.selectbox(
             "Agent Name column:",
             columns_with_none,
-            index=agent_col_idx,
-            help="Column containing agent names - AI bot or human (optional)"
+            index=agent_name_col_idx,
+            help="Column containing agent names (optional)"
         )
     
     # Process button
@@ -350,9 +350,24 @@ def render_processing_section(df: pd.DataFrame):
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if st.button("Start Analysis", type="primary", use_container_width=True):
-            run_transcript_analysis()
-            st.rerun()
+        if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
+            # Process transcripts
+            transcript_id_col = selected_transcript_id_col if selected_transcript_id_col != "(None - Auto-generate)" else None
+            agent_id_col = selected_agent_id_col if selected_agent_id_col != "(None - Auto-generate)" else None
+            agent_name_col = selected_agent_name_col if selected_agent_name_col != "(None - Auto-generate)" else None
+            
+            processed_df = process_transcripts(
+                df,
+                selected_transcript_col,
+                num_rows,
+                transcript_id_col,
+                agent_name_col,
+                agent_id_col
+            )
+            
+            if not processed_df.empty:
+                st.session_state.processed_data = processed_df
+                st.rerun()
 
 
 def run_further_analysis():
@@ -365,19 +380,6 @@ def run_further_analysis():
             st.session_state.show_analytics = True
     except Exception as e:
         st.error(f"❌ Error running analytics: {str(e)}")
-
-
-def run_transcript_analysis():
-    """Run the comprehensive transcript analysis workflow using LangGraph"""
-    try:
-        with st.spinner("🔄 Running comprehensive transcript analysis (this may take a few minutes)..."):
-            # Use the original uploaded data for transcript analysis
-            analysis_service = TranscriptAnalysisService()
-            result = analysis_service.analyze(st.session_state.data)
-            st.session_state.transcript_analysis_result = result
-            st.session_state.show_transcript_analysis = True
-    except Exception as e:
-        st.error(f"❌ Error running transcript analysis: {str(e)}")
 
 
 def render_download_section(processed_df: pd.DataFrame):
@@ -395,7 +397,7 @@ def render_download_section(processed_df: pd.DataFrame):
     timestamp = generate_timestamp()
     base_filename = f"FNOL_Analysis_Results_{timestamp}"
     
-    col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
+    col1, col2, col3 = st.columns([2, 2, 2])
     
     with col1:
         # Excel download
@@ -423,13 +425,6 @@ def render_download_section(processed_df: pd.DataFrame):
         # Further Analysis button
         if st.button("📊 Further Analysis", type="primary", use_container_width=True):
             run_further_analysis()
-            st.rerun()
-    
-    with col4:
-        # Comprehensive Transcript Analysis button
-        if st.button("🔍 Transcript Analysis", type="secondary", use_container_width=True, 
-                     help="Run comprehensive mistake identification, theme generation, root cause analysis, and severity scoring"):
-            run_transcript_analysis()
             st.rerun()
     
 
