@@ -18,6 +18,7 @@ from config.theme import EXLTheme
 from services.llm_factory import get_llm_service
 from services.file_service import FileService
 from services.analytics_service import AnalyticsService
+from services.transcript_analysis_graph import TranscriptAnalysisService
 
 # Components
 from components.sidebar import render_sidebar
@@ -32,6 +33,7 @@ from components.file_uploader import (
 from components.results_display import render_results
 from components.metrics import render_file_metrics
 from components.analytics_display import render_analytics_dashboard
+from components.transcript_analysis_display import render_transcript_analysis_dashboard
 
 # Utilities
 from utils.helpers import format_duration, generate_timestamp
@@ -65,8 +67,10 @@ def initialize_session_state():
         'processing_started': False,
         'processing_complete': False,
         'error_message': None,
-        'show_analytics': False,  # NEW: Track analytics view
-        'analytics_result': None  # NEW: Store analytics result
+        'show_analytics': False,  # Track analytics view
+        'analytics_result': None,  # Store analytics result
+        'show_transcript_analysis': False,  # Track transcript analysis view
+        'transcript_analysis_result': None  # Store transcript analysis result
     }
     
     for key, value in defaults.items():
@@ -85,6 +89,8 @@ def reset_session_state():
     st.session_state.error_message = None
     st.session_state.show_analytics = False
     st.session_state.analytics_result = None
+    st.session_state.show_transcript_analysis = False
+    st.session_state.transcript_analysis_result = None
 
 
 # ...existing code for handle_file_upload, process_transcripts, render_processing_section...
@@ -180,7 +186,7 @@ def process_transcripts(
             border-left: 4px solid #E85D04;
         ">
             <p style="margin: 0; font-weight: 600; color: #E85D04;">
-                🔄 Processing transcript {idx + 1} of {num_rows} (ID: {transcript_id})
+                Processing transcript {idx + 1} of {num_rows} (ID: {transcript_id})
             </p>
             <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.9rem;">
                 Elapsed: {format_duration(elapsed)} | 
@@ -195,27 +201,31 @@ def process_transcripts(
         if transcript_validation.is_valid:
             result = llm_service.analyze_transcript(transcript)
             
-            new_row = row.to_dict()
-            new_row['Transcript_ID'] = transcript_id
-            new_row['Agent_Name'] = agent_name
-            new_row['Missed_Points'] = "; ".join(result.missed_points)
-            new_row['Missed_Themes'] = "; ".join(result.missed_themes)
-            new_row['Num_Missed'] = result.num_missed
-            new_row['Sequence_Followed'] = result.sequence_followed
-            new_row['Summary_Missed_Things'] = result.summary_missed_things
+            new_row = {
+                'Transcript_ID': transcript_id,
+                'Agent_Name': agent_name,
+                'Transcript_Call': transcript,
+                'Missed_Points': "; ".join(result.missed_points),
+                'Missed_Themes': "; ".join(result.missed_themes),
+                'Num_Missed': result.num_missed,
+                'Sequence_Followed': result.sequence_followed,
+                'Summary_Missed_Things': result.summary_missed_things
+            }
             processed_rows.append(new_row)
             
             if result.success:
                 success_count += 1
         else:
-            new_row = row.to_dict()
-            new_row['Transcript_ID'] = transcript_id
-            new_row['Agent_Name'] = agent_name
-            new_row['Missed_Points'] = transcript_validation.message
-            new_row['Missed_Themes'] = ""
-            new_row['Num_Missed'] = 0
-            new_row['Sequence_Followed'] = "N/A"
-            new_row['Summary_Missed_Things'] = "Invalid transcript"
+            new_row = {
+                'Transcript_ID': transcript_id,
+                'Agent_Name': agent_name,
+                'Transcript_Call': transcript,
+                'Missed_Points': transcript_validation.message,
+                'Missed_Themes': "",
+                'Num_Missed': 0,
+                'Sequence_Followed': "N/A",
+                'Summary_Missed_Things': "Invalid transcript"
+            }
             processed_rows.append(new_row)
         
         # Update progress
@@ -223,7 +233,7 @@ def process_transcripts(
         
         # Sleep between API calls to avoid rate limiting (except for last item)
         if idx < num_rows - 1:
-            sleep_time = 2.0  # Configurable sleep time in seconds
+            sleep_time = 0.5  # Configurable sleep time in seconds
             time.sleep(sleep_time)
     
     # Clear status and show completion
@@ -278,13 +288,16 @@ def render_processing_section(df: pd.DataFrame):
     
     with col1:
         # Find likely transcript column
-        suggested_col = file_service.find_transcript_column(df)
-        default_idx = columns.index(suggested_col) if suggested_col and suggested_col in columns else 0
+        agent_col_idx = 0
+        for i, col in enumerate(columns):
+            if 'transcript_call' in col.lower() or 'call' in col.lower():
+                agent_col_idx = i  
+                break
         
         selected_transcript_col = st.selectbox(
             "Select the transcript column:",
             columns,
-            index=default_idx,
+            index=agent_col_idx,
             help="Choose the column containing the call transcripts to analyze"
         )
     
@@ -338,22 +351,8 @@ def render_processing_section(df: pd.DataFrame):
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("Start Analysis", type="primary", use_container_width=True):
-            with st.spinner("Initializing analysis..."):
-                # Handle "None" selections
-                transcript_id_col = None if selected_transcript_id_col == "(None - Auto-generate)" else selected_transcript_id_col
-                agent_name_col = None if selected_agent_name_col == "(None - Auto-generate)" else selected_agent_name_col
-                
-                processed_df = process_transcripts(
-                    df, 
-                    selected_transcript_col, 
-                    num_rows,
-                    transcript_id_column=transcript_id_col,
-                    agent_name_column=agent_name_col
-                )
-                st.session_state.processed_data = processed_df
-                st.session_state.processing_complete = True
-                time.sleep(1)
-                st.rerun()
+            run_transcript_analysis()
+            st.rerun()
 
 
 def run_further_analysis():
@@ -366,6 +365,19 @@ def run_further_analysis():
             st.session_state.show_analytics = True
     except Exception as e:
         st.error(f"❌ Error running analytics: {str(e)}")
+
+
+def run_transcript_analysis():
+    """Run the comprehensive transcript analysis workflow using LangGraph"""
+    try:
+        with st.spinner("🔄 Running comprehensive transcript analysis (this may take a few minutes)..."):
+            # Use the original uploaded data for transcript analysis
+            analysis_service = TranscriptAnalysisService()
+            result = analysis_service.analyze(st.session_state.data)
+            st.session_state.transcript_analysis_result = result
+            st.session_state.show_transcript_analysis = True
+    except Exception as e:
+        st.error(f"❌ Error running transcript analysis: {str(e)}")
 
 
 def render_download_section(processed_df: pd.DataFrame):
@@ -383,13 +395,13 @@ def render_download_section(processed_df: pd.DataFrame):
     timestamp = generate_timestamp()
     base_filename = f"FNOL_Analysis_Results_{timestamp}"
     
-    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
     
     with col1:
         # Excel download
         excel_data = file_service.export_to_excel(processed_df)
         st.download_button(
-            label="📥 Download Excel",
+            label="Download Excel",
             data=excel_data,
             file_name=f"{base_filename}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -400,7 +412,7 @@ def render_download_section(processed_df: pd.DataFrame):
         # CSV download
         csv_data = file_service.export_to_csv(processed_df)
         st.download_button(
-            label="📥 Download CSV",
+            label="Download CSV",
             data=csv_data,
             file_name=f"{base_filename}.csv",
             mime="text/csv",
@@ -414,10 +426,12 @@ def render_download_section(processed_df: pd.DataFrame):
             st.rerun()
     
     with col4:
-        # Reset button
-        if st.button("🔄 New Upload", use_container_width=True):
-            reset_session_state()
+        # Comprehensive Transcript Analysis button
+        if st.button("🔍 Transcript Analysis", type="secondary", use_container_width=True, 
+                     help="Run comprehensive mistake identification, theme generation, root cause analysis, and severity scoring"):
+            run_transcript_analysis()
             st.rerun()
+    
 
 
 def main():
@@ -432,10 +446,36 @@ def main():
     # Render sidebar
     render_sidebar()
     
+    # Check if we should show transcript analysis view
+    if st.session_state.show_transcript_analysis and st.session_state.transcript_analysis_result:
+        # Back button
+        col1 = st.columns([1, 9])[0]
+        with col1:
+            if st.button("← Back to Results"):
+                st.session_state.show_transcript_analysis = False
+                st.rerun()
+        
+        # Render transcript analysis dashboard
+        render_transcript_analysis_dashboard(st.session_state.transcript_analysis_result)
+        
+        # Footer
+        st.markdown("---")
+        st.markdown("""
+        <div style="text-align: center; padding: 1rem; color: #666;">
+            <p style="margin: 0; font-size: 0.85rem;">
+                <strong>EXL FNOL Transcript Analyzer</strong> | Industrial Edition v2.0
+            </p>
+            <p style="margin: 0.25rem 0 0 0; font-size: 0.8rem;">
+                Powered by © 2025 EXL Service
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+    
     # Check if we should show analytics view
     if st.session_state.show_analytics and st.session_state.analytics_result:
         # Back button
-        col1, col2 = st.columns([1, 6])
+        col1= st.columns([1, 9])[0]
         with col1:
             if st.button("← Back to Results"):
                 st.session_state.show_analytics = False
@@ -466,7 +506,7 @@ def main():
     
     with col_clear:
         st.markdown("<div style='height: 2.5rem;'></div>", unsafe_allow_html=True)  # Spacer for alignment
-        if st.button("🗑️ Clear All", type="secondary", use_container_width=True, help="Clear all data and start fresh"):
+        if st.button("❌ Clear All", type="secondary", use_container_width=True, help="Clear all data and start fresh"):
             reset_session_state()
             st.rerun()
     
