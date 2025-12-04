@@ -87,8 +87,8 @@ def render_results(processed_df: pd.DataFrame):
     
     st.markdown("---")
     
-    # Agent-wise Training Recommendations
-    render_agent_training_recommendations(processed_df)
+    # Training Opportunities Table
+    render_training_opportunities_table(processed_df)
     
 
 
@@ -1022,149 +1022,139 @@ def render_results_table(processed_df: pd.DataFrame):
     st.info(f"📊 Showing {len(display_df)} of {len(processed_df)} records")
 
 
-def render_agent_training_recommendations(processed_df: pd.DataFrame):
+def render_training_opportunities_table(processed_df: pd.DataFrame):
     """
-    Render agent-wise training recommendations based on cumulative analysis data
-    Uses LLM to generate personalized training suggestions
+    Render Training Opportunities table showing Root Cause to Training mapping with % of Total Errors
     
     Args:
         processed_df: DataFrame containing processed results
     """
-    from services.langchain_gemini_service import LangChainGeminiService
     
-    st.markdown("""
+    # Root Cause to Training Opportunity mapping
+    ROOT_CAUSE_TRAINING_MAP = {
+        'Insufficient Data Collection': 'Probing Questions and Verification Techniques',
+        'Process Non-Compliance': 'Process Compliance and Adherence',
+        'Inadequate Customer Validation': 'Probing Questions and Verification Techniques',
+        'Language & Communication Barriers': 'Effective Communication and Active Listening',
+        'Lack of Empathy': 'Empathy and Customer Service Skills',
+        'Ineffective Time Management': 'Time Management and Call Pacing',
+        'Inaccurate Documentation': 'Attention to Detail and Critical Thinking',
+        'Assumption-Based Decision Making': 'Critical Thinking and Decision Making',
+        'Inadequate Probing': 'Probing Questions and Verification Techniques',
+        'Contextual Understanding Gap': 'Sequence and Context Understanding',
+        'Documentation Accuracy Issues': 'Precision Documentation & Detail Mastery',
+        'Probing Question Deficiency': 'Effective Information Gathering Skills Training',
+        'Verification & Confirmation Failure': 'Verification Protocols Training',
+        'Critical Detail Oversight': 'Mandatory Checklist Training',
+        'Language & Communication Barrier': 'Clear Communication & Customer Understanding',
+        'Process Compliance Gap': 'Process Adherence & Accuracy Training',
+        'Sequence & Context Understanding Gap': 'Call Flow Logic & Situational Understanding Training'
+    }
+    
+    if 'root_cause' not in processed_df.columns:
+        st.info("No root cause data available for training opportunities.")
+        return
+    
+    # Collect all root causes
+    root_cause_counts = {}
+    total_errors = 0
+    
+    for _, row in processed_df.iterrows():
+        root_cause = row.get('root_cause', '')
+        if root_cause and not pd.isna(root_cause) and root_cause != '' and root_cause != 'No issues identified':
+            root_cause_str = str(root_cause).strip()
+            if root_cause_str in root_cause_counts:
+                root_cause_counts[root_cause_str] += 1
+            else:
+                root_cause_counts[root_cause_str] = 1
+            total_errors += 1
+    
+    if not root_cause_counts or total_errors == 0:
+        st.info("No root causes identified in the transcripts.")
+        return
+    
+    # Create table data with percentage calculation
+    table_data = []
+    for root_cause, count in root_cause_counts.items():
+        percentage = (count / total_errors) * 100
+        # Find matching training opportunity
+        training = ROOT_CAUSE_TRAINING_MAP.get(root_cause, 'General Skills Enhancement Training')
+        table_data.append({
+            'Root Cause': root_cause,
+            '% of Total Errors': f"{percentage:.0f}%",
+            'Training Opportunity': training,
+            '_percentage': percentage  # For sorting
+        })
+    
+    # Sort by percentage (highest first)
+    table_data.sort(key=lambda x: x['_percentage'], reverse=True)
+    
+    # Get top 3 training opportunities for header
+    top_trainings = []
+    seen_trainings = set()
+    for item in table_data:
+        training = item['Training Opportunity']
+        if training not in seen_trainings and len(top_trainings) < 3:
+            top_trainings.append(training)
+            seen_trainings.add(training)
+    
+    # Render header with top training opportunities
+    st.markdown(f"""
     <div style="
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        margin: 1.5rem 0 1rem 0;
+        background: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        margin: 1.5rem 0;
     ">
-        <span style="font-size: 1.5rem;">🎯</span>
         <h3 style="
-            color: #1A1A2E !important;
-            margin: 0;
+            color: #006666;
+            text-align: center;
+            margin: 0 0 1rem 0;
+            font-size: 1.5rem;
             font-weight: 700;
-            font-size: 1.25rem;
-        ">Agent Training Recommendations</h3>
+        ">Training Opportunities</h3>
+        <p style="
+            text-align: center;
+            color: #333;
+            margin-bottom: 1.5rem;
+            font-size: 0.95rem;
+        ">
+            <span style="font-weight: 600;">Top Training opportunities are:</span> {', '.join(top_trainings)}
+        </p>
     </div>
     """, unsafe_allow_html=True)
     
-    if 'agent_name' not in processed_df.columns:
-        st.info("No agent data available for recommendations.")
-        return
+    # Build HTML table
+    table_rows = ""
+    for item in table_data:
+        table_rows += f"""
+        <tr>
+            <td style="padding: 12px 16px; border-bottom: 1px solid #E0E0E0; color: #333;">{item['Root Cause']}</td>
+            <td style="padding: 12px 16px; border-bottom: 1px solid #E0E0E0; text-align: center; color: #006666; font-weight: 600;">{item['% of Total Errors']}</td>
+            <td style="padding: 12px 16px; border-bottom: 1px solid #E0E0E0; color: #333;">{item['Training Opportunity']}</td>
+        </tr>
+        """
     
-    # Check if recommendations are already cached
-    if 'training_recommendations' not in st.session_state:
-        st.session_state.training_recommendations = {}
-    
-    # Collect agent-wise data including agent_id
-    agent_data = {}
-    for _, row in processed_df.iterrows():
-        agent_name = row.get('agent_name', 'Unknown')
-        agent_id = row.get('agent_id', 'N/A')
-        
-        if agent_name not in agent_data:
-            agent_data[agent_name] = {
-                'agent_id': agent_id,
-                'mistakes': [],
-                'mistake_themes': [],
-                'root_causes': [],
-                'severity_scores': [],
-                'transcript_count': 0
-            }
-        
-        agent_data[agent_name]['transcript_count'] += 1
-        
-        # Collect mistakes
-        mistakes = parse_json_field(row.get('mistakes', []))
-        agent_data[agent_name]['mistakes'].extend(mistakes)
-        
-        # Collect mistake themes
-        themes = parse_json_field(row.get('mistake_themes', []))
-        agent_data[agent_name]['mistake_themes'].extend(themes)
-        
-        # Collect root causes
-        root_cause = row.get('root_cause', '')
-        if root_cause and not pd.isna(root_cause) and root_cause != 'No issues identified':
-            agent_data[agent_name]['root_causes'].append(str(root_cause))
-        
-        # Collect severity
-        if 'severity_score' in row:
-            agent_data[agent_name]['severity_scores'].append(row['severity_score'])
-    
-    # Sort agents alphabetically
-    sorted_agents = sorted(agent_data.keys())
-    
-    # Check if we need to generate recommendations (only if not cached)
-    needs_generation = any(agent not in st.session_state.training_recommendations for agent in sorted_agents)
-    
-    if needs_generation:
-        # Generate recommendations only for agents not in cache
-        with st.spinner("Generating personalized training recommendations..."):
-            try:
-                llm_service = LangChainGeminiService()
-                
-                for agent_name in sorted_agents:
-                    # Skip if already cached
-                    if agent_name in st.session_state.training_recommendations:
-                        continue
-                    
-                    data = agent_data[agent_name]
-                    
-                    # Prepare summary for LLM
-                    unique_themes = list(set(data['mistake_themes']))
-                    unique_root_causes = list(set(data['root_causes']))
-                    avg_severity = sum(data['severity_scores']) / len(data['severity_scores']) if data['severity_scores'] else 0
-                    
-                    # Create prompt for recommendation
-                    prompt = f"""Based on the following analysis of call transcripts for agent "{agent_name}", provide a concise 2-3 line training recommendation.
-
-Agent Performance Summary:
-- Total Transcripts Analyzed: {data['transcript_count']}
-- Total Mistakes: {len(data['mistakes'])}
-- Average Severity Score: {avg_severity:.1f}/100
-- Key Mistake Themes: {', '.join(unique_themes[:5]) if unique_themes else 'None identified'}
-- Root Causes: {', '.join(unique_root_causes[:3]) if unique_root_causes else 'None identified'}
-
-Provide a specific, actionable 2-3 line training recommendation focused on the most critical improvement areas. Be direct and specific about what training modules or skills the agent needs.
-
-Return ONLY the recommendation text, no formatting or prefixes."""
-
-                    # Call LLM
-                    recommendation = llm_service.llm.invoke(prompt).content.strip()
-                    
-                    # Cache the recommendation
-                    st.session_state.training_recommendations[agent_name] = {
-                        'recommendation': recommendation,
-                        'agent_id': data['agent_id']
-                    }
-                
-            except Exception as e:
-                st.error(f"Error generating recommendations: {str(e)}")
-                return
-    
-    # Display all recommendations from cache
-    for agent_name in sorted_agents:
-        if agent_name in st.session_state.training_recommendations:
-            cached = st.session_state.training_recommendations[agent_name]
-            recommendation = cached['recommendation']
-            agent_id = cached['agent_id']
-            
-            st.markdown(f"""
-            <div style="
-                background: white;
-                padding: 1rem 1.25rem;
-                border-radius: 10px;
-                border-left: 5px solid #E85D04;
-                margin-bottom: 1rem;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            ">
-                <div style="margin-bottom: 0.5rem;">
-                    <span style="color: #1A1A2E; font-weight: 700; font-size: 1rem;">👤 {agent_name}</span>
-                    <span style="color: #666; font-size: 0.85rem; margin-left: 1rem;">ID: {agent_id}</span>
-                </div>
-                <p style="color: #333; margin: 0; font-size: 0.9rem; line-height: 1.6;">
-                    {recommendation}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style="
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+    ">
+        <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr style="background: #006666;">
+                    <th style="padding: 14px 16px; text-align: left; color: white; font-weight: 600; font-size: 0.9rem;">Root Cause</th>
+                    <th style="padding: 14px 16px; text-align: center; color: white; font-weight: 600; font-size: 0.9rem;">% of Total Errors</th>
+                    <th style="padding: 14px 16px; text-align: left; color: white; font-weight: 600; font-size: 0.9rem;">Training Opportunity</th>
+                </tr>
+            </thead>
+            <tbody>
+                {table_rows}
+            </tbody>
+        </table>
+    </div>
+    """, unsafe_allow_html=True)

@@ -1,16 +1,19 @@
 """
 SOP Analysis Display Component
-Displays SOP analysis results in table format with download options
+Displays SOP analysis results in table format with download options and charts
 """
 
 import streamlit as st
 import pandas as pd
 import json
+import plotly.graph_objects as go
 from io import BytesIO
 from typing import List, Dict, Any, Optional
+from collections import Counter
 
 from services.sop_analysis_service import SOPAnalysisResult
 from utils.helpers import generate_timestamp
+from config.theme import EXLTheme
 
 
 def render_sop_analysis_header():
@@ -29,38 +32,6 @@ def render_sop_analysis_header():
         </p>
     </div>
     """, unsafe_allow_html=True)
-
-
-def render_sop_themes_section(themes: List[str]):
-    """
-    Render the SOP missing themes section
-    
-    Args:
-        themes: List of SOP missing themes
-    """
-    st.markdown("### 🏷️ Top 10 SOP Mistake Themes")
-    
-    # Ensure themes is a list
-    if not themes or not isinstance(themes, list):
-        st.info("No SOP mistake themes identified - excellent compliance across all transcripts!")
-        return
-    
-    # Display themes in a nice grid
-    cols = st.columns(2)
-    for idx, theme in enumerate(themes):
-        with cols[idx % 2]:
-            st.markdown(f"""
-            <div style="
-                background: #FFF8F0;
-                padding: 0.75rem 1rem;
-                border-radius: 8px;
-                border-left: 4px solid #E85D04;
-                margin-bottom: 0.5rem;
-            ">
-                <span style="font-weight: 600; color: #D84E00;">{idx + 1}.</span>
-                <span style="color: #1A1A2E;">{theme}</span>
-            </div>
-            """, unsafe_allow_html=True)
 
 
 def render_sop_summary_metrics(result: SOPAnalysisResult):
@@ -142,6 +113,8 @@ def render_sop_results_table(result: SOPAnalysisResult, processed_df: Optional[p
         
         # Add original columns from processed_df if available
         if processed_df is not None and not processed_df.empty:
+
+            
             transcript_id = item.get("transcript_id", "")
             # Find matching row in processed_df
             original_cols = ['mistakes', 'mistake_themes', 'root_cause', 'agent_behavior', 'severity']
@@ -220,62 +193,275 @@ def render_sop_results_table(result: SOPAnalysisResult, processed_df: Optional[p
     )
 
 
-def render_sop_detailed_view(result: SOPAnalysisResult):
+def render_sop_mistake_themes_chart(result: SOPAnalysisResult):
     """
-    Render detailed expandable view for each transcript
+    Render bar chart showing percentage distribution of SOP mistake themes
     
     Args:
         result: SOPAnalysisResult object
     """
-    st.markdown("### 🔍 Detailed View by Transcript")
+    st.markdown("""
+    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
+        📊 SOP Mistake Themes Distribution
+    </h3>
+    """, unsafe_allow_html=True)
     
-    for idx, item in enumerate(result.transcript_results):
-        transcript_id = str(item.get("transcript_id", f"T{idx+1}"))
-        
-        # Ensure sop_mistakes is a list
-        sop_mistakes = item.get("sop_mistakes", [])
-        if not isinstance(sop_mistakes, list):
-            sop_mistakes = [str(sop_mistakes)] if sop_mistakes else []
-        
-        # Determine status color
-        if not sop_mistakes:
-            status_icon = "✅"
-            status_text = "Compliant"
-        elif len(sop_mistakes) <= 2:
-            status_icon = "⚠️"
-            status_text = "Minor Issues"
+    # Extract all SOP mistake themes from results
+    all_themes = []
+    for item in result.transcript_results:
+        themes = item.get("sop_mistake_themes", [])
+        if not isinstance(themes, list):
+            themes = [str(themes)] if themes else []
+        all_themes.extend(themes)
+    
+    if not all_themes:
+        st.info("No SOP mistake themes to display")
+        return
+    
+    # Count theme occurrences
+    theme_counts = Counter(all_themes)
+    total_themes = sum(theme_counts.values())
+    
+    # Create DataFrame for chart
+    chart_data = pd.DataFrame([
+        {'Theme': theme, 'Count': count, 'Percentage': (count / total_themes) * 100}
+        for theme, count in theme_counts.most_common()
+    ])
+    
+    # Calculate number of bars
+    num_bars = len(chart_data)
+    
+    # Generate gradient colors from full orange to transparent
+    exl_colors = []
+    for i in range(num_bars):
+        opacity = 1.0 - (i * 0.7 / max(num_bars - 1, 1))
+        exl_colors.append(f'rgba(232, 93, 4, {opacity})')
+    
+    # Generate text colors - dark for transparent bars, white for opaque
+    text_colors = []
+    for i in range(num_bars):
+        opacity = 1.0 - (i * 0.7 / max(num_bars - 1, 1))
+        if opacity > 0.5:
+            text_colors.append('white')
         else:
-            status_icon = "❌"
-            status_text = "Needs Improvement"
+            text_colors.append('#1A1A2E')
+    
+    # Create horizontal bar chart with Plotly
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=chart_data['Theme'],
+        x=chart_data['Percentage'],
+        orientation='h',
+        marker=dict(
+            color=exl_colors,
+            line=dict(color='#E85D04', width=1)
+        ),
+        text=[f"{p:.1f}%" for p in chart_data['Percentage']],
+        textposition='inside',
+        textfont=dict(color=text_colors, size=12),
+        hovertemplate='<b>%{y}</b><br>Count: %{customdata}<br>Percentage: %{x:.1f}%<extra></extra>',
+        customdata=chart_data['Count']
+    ))
+    
+    fig.update_layout(
+        title='<b>% of SOP Mistake Themes</b>',
+        xaxis_title='Percentage (%)',
+        yaxis_title='',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=20, r=20, t=60, b=40),
+        height=max(300, len(chart_data) * 40 + 100),
+        showlegend=False,
+        yaxis=dict(autorange='reversed'),
+        xaxis=dict(range=[0, max(chart_data['Percentage']) * 1.15], gridcolor='rgba(0,0,0,0.1)')
+    )
+    
+    # Add border styling
+    fig.update_xaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
+    fig.update_yaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_sop_themes_vs_agents_chart(result: SOPAnalysisResult):
+    """
+    Render horizontal bar chart showing each SOP Mistake Theme and how many agents committed it
+    
+    Args:
+        result: SOPAnalysisResult object
+    """
+    st.markdown("""
+    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
+        ⚠️ SOP Mistake Themes vs Agents
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    # Count unique agents per SOP mistake theme
+    theme_agent_data = {}
+    for item in result.transcript_results:
+        agent_name = item.get("agent_name", "Unknown")
+        themes = item.get("sop_mistake_themes", [])
+        if not isinstance(themes, list):
+            themes = [str(themes)] if themes else []
         
-        with st.expander(f"{status_icon} {transcript_id} ({status_text} - {len(sop_mistakes)} mistakes)", expanded=False):
-            col1, col2 = st.columns([1, 1])
-            
-            with col1:
-                st.markdown("**📋 SOP Mistakes:**")
-                if sop_mistakes:
-                    for mistake in sop_mistakes:
-                        st.markdown(f"- {mistake}")
-                else:
-                    st.success("No SOP violations found")
-                
-                st.markdown("**🏷️ Assigned Themes:**")
-                themes = item.get("sop_mistake_themes", [])
-                if not isinstance(themes, list):
-                    themes = [str(themes)] if themes else []
-                if themes:
-                    st.markdown(", ".join(str(t) for t in themes))
-                else:
-                    st.info("No themes assigned")
-            
-            with col2:
-                st.markdown("**💡 Reasoning:**")
-                reasoning = item.get("sop_mistakes_reasoning", "N/A")
-                st.markdown(str(reasoning) if reasoning else "N/A")
-                
-                st.markdown("**📈 Improvements:**")
-                improvements = item.get("sop_improvements", "N/A")
-                st.markdown(str(improvements) if improvements else "N/A")
+        for theme in themes:
+            if theme not in theme_agent_data:
+                theme_agent_data[theme] = set()
+            theme_agent_data[theme].add(agent_name)
+    
+    if not theme_agent_data:
+        st.info("No SOP mistake themes to display")
+        return
+    
+    # Create DataFrame with theme and agent count
+    chart_data = pd.DataFrame([
+        {'Theme': theme, 'Agent Count': len(agents)}
+        for theme, agents in theme_agent_data.items()
+    ])
+    chart_data = chart_data.sort_values('Agent Count', ascending=True)
+    
+    # Generate EXL gradient colors (orange to transparent)
+    num_bars = len(chart_data)
+    bar_colors = []
+    for i in range(num_bars):
+        opacity = 0.3 + (i * 0.7 / max(num_bars - 1, 1))
+        bar_colors.append(f'rgba(232, 93, 4, {opacity})')
+    
+    # Generate text colors based on opacity
+    text_colors = []
+    for i in range(num_bars):
+        opacity = 0.3 + (i * 0.7 / max(num_bars - 1, 1))
+        if opacity > 0.5:
+            text_colors.append('white')
+        else:
+            text_colors.append('#1A1A2E')
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=chart_data['Theme'],
+        x=chart_data['Agent Count'],
+        orientation='h',
+        marker=dict(
+            color=bar_colors,
+            line=dict(color='#E85D04', width=1)
+        ),
+        text=chart_data['Agent Count'],
+        textposition='inside',
+        textfont=dict(color=text_colors, size=12, weight='bold'),
+        hovertemplate='<b>%{y}</b><br>Agents with this mistake: %{x}<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title='<b>Agents per SOP Mistake Theme</b>',
+        xaxis_title='Number of Agents',
+        yaxis_title='',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=20, r=20, t=60, b=40),
+        height=max(300, len(chart_data) * 40 + 100),
+        showlegend=False
+    )
+    
+    fig.update_xaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE, gridcolor='rgba(0,0,0,0.1)')
+    fig.update_yaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_agent_vs_sop_themes_chart(result: SOPAnalysisResult):
+    """
+    Render horizontal stacked bar chart showing Agent vs SOP Mistake Themes distribution
+    
+    Args:
+        result: SOPAnalysisResult object
+    """
+    st.markdown("""
+    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
+        👤 Agent vs SOP Mistake Themes
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    # Collect agent-theme data
+    agent_theme_data = []
+    for item in result.transcript_results:
+        agent_name = item.get("agent_name", "Unknown")
+        themes = item.get("sop_mistake_themes", [])
+        if not isinstance(themes, list):
+            themes = [str(themes)] if themes else []
+        
+        for theme in themes:
+            agent_theme_data.append({'agent': agent_name, 'theme': theme})
+    
+    if not agent_theme_data:
+        st.info("No data available for Agent vs SOP Themes chart")
+        return
+    
+    # Create DataFrame and count
+    at_df = pd.DataFrame(agent_theme_data)
+    at_counts = at_df.groupby(['agent', 'theme']).size().reset_index(name='count')
+    
+    # Sort agents by total mistake count (highest to lowest)
+    agent_totals = at_counts.groupby('agent')['count'].sum().sort_values(ascending=False)
+    agents = agent_totals.index.tolist()
+    
+    # Sort themes by total count (highest to lowest)
+    theme_totals = at_counts.groupby('theme')['count'].sum().sort_values(ascending=False)
+    themes = theme_totals.index.tolist()
+    
+    # Generate EXL gradient colors (orange to transparent) for themes
+    num_themes = len(themes)
+    theme_colors = []
+    for i in range(num_themes):
+        opacity = 1.0 - (i * 0.6 / max(num_themes - 1, 1))
+        theme_colors.append(f'rgba(232, 93, 4, {opacity})')
+    
+    fig = go.Figure()
+    
+    for i, theme in enumerate(themes):
+        theme_data = at_counts[at_counts['theme'] == theme]
+        counts = []
+        for agent in agents:
+            agent_theme_count = theme_data[theme_data['agent'] == agent]['count'].sum()
+            counts.append(agent_theme_count)
+        
+        fig.add_trace(go.Bar(
+            y=agents,
+            x=counts,
+            name=theme,
+            orientation='h',
+            marker=dict(color=theme_colors[i], line=dict(color='#E85D04', width=0.5)),
+            hovertemplate=f'<b>{theme}</b><br>Agent: %{{y}}<br>Count: %{{x}}<extra></extra>'
+        ))
+    
+    fig.update_layout(
+        barmode='stack',
+        xaxis_title='Count',
+        yaxis_title='',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=20, r=250, t=10, b=80),
+        height=max(400, len(agents) * 50 + 100),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.15,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=9),
+            bgcolor='rgba(255,255,255,0.95)',
+            bordercolor='#E85D04',
+            borderwidth=1,
+            tracegroupgap=2
+        ),
+        yaxis=dict(categoryorder='array', categoryarray=agents[::-1])
+    )
+    
+    fig.update_xaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE, gridcolor='rgba(0,0,0,0.1)')
+    fig.update_yaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
+    
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def export_to_excel(result: SOPAnalysisResult, processed_df: Optional[pd.DataFrame] = None) -> bytes:
@@ -414,7 +600,7 @@ def render_sop_download_section(result: SOPAnalysisResult, processed_df: Optiona
     timestamp = generate_timestamp()
     base_filename = f"SOP_Analysis_Results_{timestamp}"
     
-    col1, col2, col3 = st.columns([1, 1, 1])
+    col1, col2 = st.columns([1, 1])
     
     with col1:
         excel_data = export_to_excel(result, processed_df)
@@ -432,25 +618,6 @@ def render_sop_download_section(result: SOPAnalysisResult, processed_df: Optiona
             label="📥 Download CSV",
             data=csv_data,
             file_name=f"{base_filename}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-    
-    with col3:
-        # Download themes only
-        themes_list = result.sop_missing_themes if isinstance(result.sop_missing_themes, list) else []
-        if themes_list:
-            themes_csv = pd.DataFrame({
-                "Theme_Number": range(1, len(themes_list) + 1),
-                "SOP_Mistake_Theme": themes_list
-            }).to_csv(index=False)
-        else:
-            themes_csv = pd.DataFrame(columns=["Theme_Number", "SOP_Mistake_Theme"]).to_csv(index=False)
-        
-        st.download_button(
-            label="📥 Download Themes",
-            data=themes_csv,
-            file_name=f"SOP_Themes_{timestamp}.csv",
             mime="text/csv",
             use_container_width=True
         )
@@ -472,18 +639,22 @@ def render_sop_analysis_dashboard(result: SOPAnalysisResult, processed_df: Optio
     
     st.markdown("---")
     
-    # SOP Themes section
-    render_sop_themes_section(result.sop_missing_themes)
-    
-    st.markdown("---")
-    
     # Results table with previous columns
     render_sop_results_table(result, processed_df)
     
     st.markdown("---")
     
-    # Detailed view
-    render_sop_detailed_view(result)
+    # Charts Row: SOP Mistake Themes Distribution & SOP Themes vs Agents
+    col1, col2 = st.columns(2)
+    with col1:
+        render_sop_mistake_themes_chart(result)
+    with col2:
+        render_sop_themes_vs_agents_chart(result)
+    
+    st.markdown("---")
+    
+    # Agent vs SOP Themes chart
+    render_agent_vs_sop_themes_chart(result)
     
     st.markdown("---")
     
