@@ -1053,6 +1053,10 @@ def render_agent_training_recommendations(processed_df: pd.DataFrame):
         st.info("No agent data available for recommendations.")
         return
     
+    # Check if recommendations are already cached
+    if 'training_recommendations' not in st.session_state:
+        st.session_state.training_recommendations = {}
+    
     # Collect agent-wise data including agent_id
     agent_data = {}
     for _, row in processed_df.iterrows():
@@ -1091,21 +1095,29 @@ def render_agent_training_recommendations(processed_df: pd.DataFrame):
     # Sort agents alphabetically
     sorted_agents = sorted(agent_data.keys())
     
-    # Generate recommendations automatically on load
-    with st.spinner("Generating personalized training recommendations..."):
-        try:
-            llm_service = LangChainGeminiService()
-            
-            for agent_name in sorted_agents:
-                data = agent_data[agent_name]
+    # Check if we need to generate recommendations (only if not cached)
+    needs_generation = any(agent not in st.session_state.training_recommendations for agent in sorted_agents)
+    
+    if needs_generation:
+        # Generate recommendations only for agents not in cache
+        with st.spinner("Generating personalized training recommendations..."):
+            try:
+                llm_service = LangChainGeminiService()
                 
-                # Prepare summary for LLM
-                unique_themes = list(set(data['mistake_themes']))
-                unique_root_causes = list(set(data['root_causes']))
-                avg_severity = sum(data['severity_scores']) / len(data['severity_scores']) if data['severity_scores'] else 0
-                
-                # Create prompt for recommendation
-                prompt = f"""Based on the following analysis of call transcripts for agent "{agent_name}", provide a concise 2-3 line training recommendation.
+                for agent_name in sorted_agents:
+                    # Skip if already cached
+                    if agent_name in st.session_state.training_recommendations:
+                        continue
+                    
+                    data = agent_data[agent_name]
+                    
+                    # Prepare summary for LLM
+                    unique_themes = list(set(data['mistake_themes']))
+                    unique_root_causes = list(set(data['root_causes']))
+                    avg_severity = sum(data['severity_scores']) / len(data['severity_scores']) if data['severity_scores'] else 0
+                    
+                    # Create prompt for recommendation
+                    prompt = f"""Based on the following analysis of call transcripts for agent "{agent_name}", provide a concise 2-3 line training recommendation.
 
 Agent Performance Summary:
 - Total Transcripts Analyzed: {data['transcript_count']}
@@ -1118,28 +1130,41 @@ Provide a specific, actionable 2-3 line training recommendation focused on the m
 
 Return ONLY the recommendation text, no formatting or prefixes."""
 
-                # Call LLM
-                recommendation = llm_service.llm.invoke(prompt).content.strip()
+                    # Call LLM
+                    recommendation = llm_service.llm.invoke(prompt).content.strip()
+                    
+                    # Cache the recommendation
+                    st.session_state.training_recommendations[agent_name] = {
+                        'recommendation': recommendation,
+                        'agent_id': data['agent_id']
+                    }
                 
-                # Display recommendation card
-                st.markdown(f"""
-                <div style="
-                    background: white;
-                    padding: 1rem 1.25rem;
-                    border-radius: 10px;
-                    border-left: 5px solid #E85D04;
-                    margin-bottom: 1rem;
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-                ">
-                    <div style="margin-bottom: 0.5rem;">
-                        <span style="color: #1A1A2E; font-weight: 700; font-size: 1rem;">👤 {agent_name}</span>
-                        <span style="color: #666; font-size: 0.85rem; margin-left: 1rem;">ID: {data['agent_id']}</span>
-                    </div>
-                    <p style="color: #333; margin: 0; font-size: 0.9rem; line-height: 1.6;">
-                        {recommendation}
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Error generating recommendations: {str(e)}")
+                return
+    
+    # Display all recommendations from cache
+    for agent_name in sorted_agents:
+        if agent_name in st.session_state.training_recommendations:
+            cached = st.session_state.training_recommendations[agent_name]
+            recommendation = cached['recommendation']
+            agent_id = cached['agent_id']
             
-        except Exception as e:
-            st.error(f"Error generating recommendations: {str(e)}")
+            st.markdown(f"""
+            <div style="
+                background: white;
+                padding: 1rem 1.25rem;
+                border-radius: 10px;
+                border-left: 5px solid #E85D04;
+                margin-bottom: 1rem;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            ">
+                <div style="margin-bottom: 0.5rem;">
+                    <span style="color: #1A1A2E; font-weight: 700; font-size: 1rem;">👤 {agent_name}</span>
+                    <span style="color: #666; font-size: 0.85rem; margin-left: 1rem;">ID: {agent_id}</span>
+                </div>
+                <p style="color: #333; margin: 0; font-size: 0.9rem; line-height: 1.6;">
+                    {recommendation}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)

@@ -35,6 +35,9 @@ from components.metrics import render_file_metrics
 from components.analytics_display import render_analytics_dashboard
 from components.transcript_analysis_display import render_transcript_analysis_dashboard
 
+# Pages
+from pages.sop_analysis_page import render_sop_analysis_page, reset_sop_session_state
+
 # Utilities
 from utils.helpers import format_duration, generate_timestamp
 from utils.validators import validate_dataframe, validate_transcript_content
@@ -70,7 +73,8 @@ def initialize_session_state():
         'show_analytics': False,  # Track analytics view
         'analytics_result': None,  # Store analytics result
         'show_transcript_analysis': False,  # Track transcript analysis view
-        'transcript_analysis_result': None  # Store transcript analysis result
+        'transcript_analysis_result': None,  # Store transcript analysis result
+        'show_sop_analysis': False,  # Track SOP analysis view
     }
     
     for key, value in defaults.items():
@@ -91,6 +95,12 @@ def reset_session_state():
     st.session_state.analytics_result = None
     st.session_state.show_transcript_analysis = False
     st.session_state.transcript_analysis_result = None
+    st.session_state.show_sop_analysis = False
+    # Reset training recommendations cache
+    if 'training_recommendations' in st.session_state:
+        st.session_state.training_recommendations = {}
+    # Reset SOP session state
+    reset_sop_session_state()
 
 
 # ...existing code for handle_file_upload, process_transcripts, render_processing_section...
@@ -339,6 +349,11 @@ def run_further_analysis():
         st.error(f"❌ Error running analytics: {str(e)}")
 
 
+def navigate_to_sop_analysis():
+    """Navigate to SOP analysis page"""
+    st.session_state.show_sop_analysis = True
+
+
 def render_download_section(processed_df: pd.DataFrame):
     """
     Render the download section for results
@@ -379,9 +394,9 @@ def render_download_section(processed_df: pd.DataFrame):
         )
     
     with col3:
-        # Further Analysis button
-        if st.button("📊 Further Analysis", type="primary", use_container_width=True):
-            run_further_analysis()
+        # SOP Analysis button - navigates to SOP upload and analysis page
+        if st.button("📊 SOP Analysis", type="primary", use_container_width=True, key="sop_analysis_btn"):
+            navigate_to_sop_analysis()
             st.rerun()
     
 
@@ -403,7 +418,7 @@ def main():
         # Back button
         col1 = st.columns([1, 9])[0]
         with col1:
-            if st.button("← Back to Results"):
+            if st.button("← Back to Results", key="back_from_transcript_analysis"):
                 st.session_state.show_transcript_analysis = False
                 st.rerun()
         
@@ -429,12 +444,39 @@ def main():
         # Back button
         col1= st.columns([1, 9])[0]
         with col1:
-            if st.button("← Back to Results"):
+            if st.button("← Back to Results", key="back_from_analytics"):
                 st.session_state.show_analytics = False
                 st.rerun()
         
         # Render analytics dashboard
         render_analytics_dashboard(st.session_state.analytics_result)
+        
+        # Footer
+        st.markdown("---")
+        st.markdown("""
+        <div style="text-align: center; padding: 1rem; color: #666;">
+            <p style="margin: 0; font-size: 0.85rem;">
+                <strong>EXL FNOL Transcript Analyzer</strong> | Industrial Edition v2.0
+            </p>
+            <p style="margin: 0.25rem 0 0 0; font-size: 0.8rem;">
+                Powered by © 2025 EXL Service
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+    
+    # Check if we should show SOP analysis view
+    if st.session_state.show_sop_analysis and st.session_state.processed_data is not None:
+        # Back button
+        col1 = st.columns([1, 9])[0]
+        with col1:
+            if st.button("← Back to Results", key="back_from_sop_analysis"):
+                st.session_state.show_sop_analysis = False
+                reset_sop_session_state()
+                st.rerun()
+        
+        # Render SOP analysis page
+        render_sop_analysis_page(st.session_state.processed_data)
         
         # Footer
         st.markdown("---")
