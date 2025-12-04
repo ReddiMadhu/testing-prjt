@@ -257,93 +257,55 @@ def render_processing_section(df: pd.DataFrame):
         <h4 style="color: #D84E00 !important; margin: 0 0 0.5rem 0;">LangGraph Transcript Analysis</h4>
         <p style="margin: 0; color: #1A1A2E;">
             The AI will analyze each transcript to identify mistakes, generate themes, 
-            determine root causes, calculate severity scores, and provide reasoning.
+            determine root causes, calculate severity scores, and provide recommendations.
             Processing time: approximately 5-10 seconds per transcript.
         </p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Column selection
-    file_service = FileService()
+    # Auto-detect columns
     columns = df.columns.tolist()
-    columns_with_none = ["(None - Auto-generate)"] + columns
+    columns_lower = [col.lower() for col in columns]
     
-    # Row 1: Transcript column and number of rows
-    col1, col2 = st.columns([2, 1])
+    # Auto-map columns
+    def find_column(keywords):
+        for keyword in keywords:
+            for i, col in enumerate(columns_lower):
+                if keyword in col:
+                    return columns[i]
+        return None
+    
+    transcript_col = find_column(['transcript_call', 'transcript', 'call'])
+    transcript_id_col = find_column(['transcript_id', 'transcriptid'])
+    agent_id_col = find_column(['agent_id', 'agentid'])
+    agent_name_col = find_column(['agent_name', 'agentname', 'agent'])
+    
+    # Show detected columns
+    st.markdown("##### Auto-detected Columns")
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        # Find likely transcript column
-        transcript_col_idx = 0
-        for i, col in enumerate(columns):
-            if 'transcript_call' in col.lower() or 'transcript' in col.lower() or 'call' in col.lower():
-                transcript_col_idx = i  
-                break
-        
-        selected_transcript_col = st.selectbox(
-            "Select the transcript column:",
-            columns,
-            index=transcript_col_idx,
-            help="Choose the column containing the call transcripts to analyze"
-        )
-    
+        st.info(f"📝 **Transcript:** {transcript_col or 'Not found'}")
     with col2:
-        max_rows = min(settings.file.max_rows_to_process, len(df))
-        num_rows = st.slider(
-            "Transcripts to process:",
-            min_value=1,
-            max_value=max_rows,
-            value=min(settings.file.default_rows_to_process, max_rows),
-            help=f"Select number of transcripts to analyze (max {max_rows})"
-        )
-    
-    # Row 2: Transcript ID, Agent ID, Agent Name columns
-    st.markdown("##### Optional: Map Excel Columns")
-    col3, col4, col5 = st.columns(3)
-    
+        st.info(f"🆔 **Transcript ID:** {transcript_id_col or 'Auto-generate'}")
     with col3:
-        # Find likely transcript_id column
-        id_col_idx = 0
-        for i, col in enumerate(columns):
-            if 'transcript_id' in col.lower() or 'id' in col.lower():
-                id_col_idx = i + 1
-                break
-        
-        selected_transcript_id_col = st.selectbox(
-            "Transcript ID column:",
-            columns_with_none,
-            index=id_col_idx,
-            help="Column containing transcript IDs (optional)"
-        )
-    
+        st.info(f"👤 **Agent ID:** {agent_id_col or 'Auto-generate'}")
     with col4:
-        # Find likely agent_id column
-        agent_id_col_idx = 0
-        for i, col in enumerate(columns):
-            if 'agent_id' in col.lower():
-                agent_id_col_idx = i + 1
-                break
-        
-        selected_agent_id_col = st.selectbox(
-            "Agent ID column:",
-            columns_with_none,
-            index=agent_id_col_idx,
-            help="Column containing agent IDs (optional)"
-        )
+        st.info(f"📛 **Agent Name:** {agent_name_col or 'Auto-generate'}")
     
-    with col5:
-        # Find likely agent_name column
-        agent_name_col_idx = 0
-        for i, col in enumerate(columns):
-            if 'agent_name' in col.lower() or 'agent' in col.lower():
-                agent_name_col_idx = i + 1
-                break
-        
-        selected_agent_name_col = st.selectbox(
-            "Agent Name column:",
-            columns_with_none,
-            index=agent_name_col_idx,
-            help="Column containing agent names (optional)"
-        )
+    if not transcript_col:
+        st.error("❌ Could not find transcript column. Please ensure your file has a column with 'transcript' or 'call' in the name.")
+        return
+    
+    # Number of rows slider
+    max_rows = min(settings.file.max_rows_to_process, len(df))
+    num_rows = st.slider(
+        "Number of transcripts to process:",
+        min_value=1,
+        max_value=max_rows,
+        value=min(settings.file.default_rows_to_process, max_rows),
+        help=f"Select number of transcripts to analyze (max {max_rows})"
+    )
     
     # Process button
     st.markdown("<br>", unsafe_allow_html=True)
@@ -351,14 +313,9 @@ def render_processing_section(df: pd.DataFrame):
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
-            # Process transcripts
-            transcript_id_col = selected_transcript_id_col if selected_transcript_id_col != "(None - Auto-generate)" else None
-            agent_id_col = selected_agent_id_col if selected_agent_id_col != "(None - Auto-generate)" else None
-            agent_name_col = selected_agent_name_col if selected_agent_name_col != "(None - Auto-generate)" else None
-            
             processed_df = process_transcripts(
                 df,
-                selected_transcript_col,
+                transcript_col,
                 num_rows,
                 transcript_id_col,
                 agent_name_col,

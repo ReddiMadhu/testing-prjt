@@ -1,7 +1,7 @@
 """
 Simplified Transcript Analysis LangGraph Service
 Outputs: transcript_id, transcript_call, agent_id, agent_name, mistakes, 
-         mistake_themes, root_cause, severity_score, reasoning
+         mistake_themes, root_cause, severity_score, reasoning, recommendation
 """
 
 import os
@@ -94,7 +94,7 @@ PROMPT_THEMES = """Analyze these mistakes and create 10 common mistake themes.
 """
 
 
-PROMPT_ANALYSIS = """Analyze this transcript's mistakes and provide root causes, severity, and reasoning.
+PROMPT_ANALYSIS = """Analyze this transcript's mistakes and provide root cause, severity, reasoning, and recommendations.
 
 **Transcript ID:** {transcript_id}
 **Agent ID:** {agent_id}
@@ -108,17 +108,19 @@ PROMPT_ANALYSIS = """Analyze this transcript's mistakes and provide root causes,
 
 **Instructions:**
 1. Map mistakes to themes from the list
-2. Identify root causes for each mistake
+2. Identify the PRIMARY root cause (single main reason) for all mistakes
 3. Calculate severity score (0-100, where 100 is perfect)
-4. Provide reasoning behind root causes
+4. Provide reasoning behind root cause
+5. Provide actionable recommendations for improvement
 
 **Return ONLY valid JSON:**
 ```json
 {{
   "mistake_themes": ["theme1", "theme2"],
-  "root_cause": ["root cause 1", "root cause 2"],
+  "root_cause": "Single primary root cause that best explains the mistakes",
   "severity_score": 75,
-  "reasoning": "Detailed reasoning behind the root causes identified"
+  "reasoning": "Detailed reasoning behind the root cause identified",
+  "recommendation": "Specific actionable recommendations for the agent to improve performance, including training suggestions, process improvements, and coaching focus areas"
 }}
 ```
 """
@@ -147,6 +149,24 @@ class FinalTranscriptAnalysis:
         )
         
         self.workflow = self._build_workflow()
+    
+    def _get_severity_level(self, severity_score: int) -> str:
+        """Calculate severity level based on score.
+        
+        Args:
+            severity_score: Score from 0-100 (100 is perfect, lower is worse)
+            
+        Returns:
+            Severity level: HIGH (>80), MEDIUM (60-80), LOW (<50)
+        """
+        if severity_score > 80:
+            return "HIGH"
+        elif severity_score >= 60:
+            return "MEDIUM"
+        elif severity_score < 50:
+            return "LOW"
+        else:
+            return "MEDIUM"  # 50-59 range defaults to MEDIUM
     
     def _rate_limit(self):
         """Apply rate limiting"""
@@ -308,9 +328,11 @@ class FinalTranscriptAnalysis:
                     "agent_name": agent_name,
                     "mistakes": [],
                     "mistake_themes": [],
-                    "root_cause": [],
+                    "root_cause": "No issues identified",
                     "severity_score": 100,
-                    "reasoning": "No mistakes identified - excellent performance"
+                    "severity_level": "HIGH",
+                    "reasoning": "No mistakes identified - excellent performance",
+                    "recommendation": "Continue maintaining high standards. Consider mentoring other agents."
                 })
                 continue
             
@@ -327,6 +349,9 @@ class FinalTranscriptAnalysis:
             response = self._call_llm(prompt)
             parsed = self._parse_json(response)
             
+            severity_score = parsed.get("severity_score", 100)
+            severity_level = self._get_severity_level(severity_score)
+            
             final_results.append({
                 "transcript_id": transcript_id,
                 "transcript_call": transcript_call,
@@ -334,9 +359,11 @@ class FinalTranscriptAnalysis:
                 "agent_name": agent_name,
                 "mistakes": mistakes,
                 "mistake_themes": parsed.get("mistake_themes", []),
-                "root_cause": parsed.get("root_cause", []),
-                "severity_score": parsed.get("severity_score", 100),
-                "reasoning": parsed.get("reasoning", "")
+                "root_cause": parsed.get("root_cause", "Unknown"),
+                "severity_score": severity_score,
+                "severity_level": severity_level,
+                "reasoning": parsed.get("reasoning", ""),
+                "recommendation": parsed.get("recommendation", "")
             })
         
         state["final_results"] = final_results
@@ -411,6 +438,8 @@ class FinalTranscriptAnalysis:
         
         records = []
         for result in analysis_result["final_results"]:
+            severity_score = result.get("severity_score", 100)
+            severity_level = result.get("severity_level", self._get_severity_level(severity_score))
             records.append({
                 "transcript_id": result.get("transcript_id"),
                 "transcript_call": result.get("transcript_call"),
@@ -418,9 +447,11 @@ class FinalTranscriptAnalysis:
                 "agent_name": result.get("agent_name"),
                 "mistakes": json.dumps(result.get("mistakes", [])),
                 "mistake_themes": json.dumps(result.get("mistake_themes", [])),
-                "root_cause": json.dumps(result.get("root_cause", [])),
-                "severity_score": result.get("severity_score", 100),
-                "reasoning": result.get("reasoning", "")
+                "root_cause": result.get("root_cause", "Unknown"),
+                "severity_score": severity_score,
+                "severity_level": severity_level,
+                "reasoning": result.get("reasoning", ""),
+                "recommendation": result.get("recommendation", "")
             })
         
         return pd.DataFrame(records)
