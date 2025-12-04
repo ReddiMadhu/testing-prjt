@@ -1030,59 +1030,42 @@ def render_training_opportunities_table(processed_df: pd.DataFrame):
         processed_df: DataFrame containing processed results
     """
     
-    # Root Cause to Training Opportunity mapping
-    ROOT_CAUSE_TRAINING_MAP = {
-        'Insufficient Data Collection': 'Probing Questions and Verification Techniques',
-        'Process Non-Compliance': 'Process Compliance and Adherence',
-        'Inadequate Customer Validation': 'Probing Questions and Verification Techniques',
-        'Language & Communication Barriers': 'Effective Communication and Active Listening',
-        'Lack of Empathy': 'Empathy and Customer Service Skills',
-        'Ineffective Time Management': 'Time Management and Call Pacing',
-        'Inaccurate Documentation': 'Attention to Detail and Critical Thinking',
-        'Assumption-Based Decision Making': 'Critical Thinking and Decision Making',
-        'Inadequate Probing': 'Probing Questions and Verification Techniques',
-        'Contextual Understanding Gap': 'Sequence and Context Understanding',
-        'Documentation Accuracy Issues': 'Precision Documentation & Detail Mastery',
-        'Probing Question Deficiency': 'Effective Information Gathering Skills Training',
-        'Verification & Confirmation Failure': 'Verification Protocols Training',
-        'Critical Detail Oversight': 'Mandatory Checklist Training',
-        'Language & Communication Barrier': 'Clear Communication & Customer Understanding',
-        'Process Compliance Gap': 'Process Adherence & Accuracy Training',
-        'Sequence & Context Understanding Gap': 'Call Flow Logic & Situational Understanding Training'
-    }
-    
     if 'root_cause' not in processed_df.columns:
         st.info("No root cause data available for training opportunities.")
         return
     
-    # Collect all root causes
-    root_cause_counts = {}
+    # Collect root causes with their agent_recommendation (training)
+    root_cause_data = {}
     total_errors = 0
     
     for _, row in processed_df.iterrows():
         root_cause = row.get('root_cause', '')
+        agent_recommendation = row.get('agent_recommendation', '')
+        
         if root_cause and not pd.isna(root_cause) and root_cause != '' and root_cause != 'No issues identified':
             root_cause_str = str(root_cause).strip()
-            if root_cause_str in root_cause_counts:
-                root_cause_counts[root_cause_str] += 1
-            else:
-                root_cause_counts[root_cause_str] = 1
+            training = str(agent_recommendation).strip() if agent_recommendation and not pd.isna(agent_recommendation) else 'General Skills Enhancement Training'
+            
+            if root_cause_str not in root_cause_data:
+                root_cause_data[root_cause_str] = {
+                    'count': 0,
+                    'training': training
+                }
+            root_cause_data[root_cause_str]['count'] += 1
             total_errors += 1
-    
-    if not root_cause_counts or total_errors == 0:
+        
+    if not root_cause_data or total_errors == 0:
         st.info("No root causes identified in the transcripts.")
         return
     
     # Create table data with percentage calculation
     table_data = []
-    for root_cause, count in root_cause_counts.items():
-        percentage = (count / total_errors) * 100
-        # Find matching training opportunity
-        training = ROOT_CAUSE_TRAINING_MAP.get(root_cause, 'General Skills Enhancement Training')
+    for root_cause, data in root_cause_data.items():
+        percentage = (data['count'] / total_errors) * 100
         table_data.append({
             'Root Cause': root_cause,
             '% of Total Errors': f"{percentage:.0f}%",
-            'Training Opportunity': training,
+            'Training Opportunity': data['training'],
             '_percentage': percentage  # For sorting
         })
     
