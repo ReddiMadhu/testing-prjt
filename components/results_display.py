@@ -52,655 +52,9 @@ def render_results(processed_df: pd.DataFrame):
     </div>
     """, unsafe_allow_html=True)
     
-    # Summary metrics
-    render_results_summary(processed_df)
-    st.markdown("---")
-    
-    # Detailed results table
-    render_results_table(processed_df)
-    st.markdown("---")
-    
-    # Charts Row 1: Mistake Themes & Root Cause Treemap side by side
-    col1, col2 = st.columns(2)
-    with col1:
-        render_mistake_themes_chart(processed_df)
-    with col2:
-        render_root_cause_treemap(processed_df)
-    
-    st.markdown("---")
-    
-    # Charts Row 2: Agent vs Mistake Themes & Mistake Themes vs Agents
-    col3, col4 = st.columns(2)
-    with col3:
-        render_agent_vs_mistake_themes_chart(processed_df)
-    with col4:
-        render_mistake_themes_vs_agents_chart(processed_df)
-    
-    st.markdown("---")
-    
-    # Charts Row 3: Agent vs Root Cause Treemap & Agent vs Severities Treemap
-    col5, col6 = st.columns(2)
-    with col5:
-        render_agent_vs_root_cause_treemap(processed_df)
-    with col6:
-        render_agent_vs_severity_treemap(processed_df)
-    
-    st.markdown("---")
-    
-    # Training Opportunities Table
-    render_training_opportunities_table(processed_df)
-    
-
-
-
-def render_results_summary(processed_df: pd.DataFrame):
-    """
-    Render summary metrics for analysis results
-    
-    Args:
-        processed_df: DataFrame containing processed results
-    """
-    
-    total = len(processed_df)
-    
-    # Calculate metrics - handle new JSON format columns
-    if 'mistakes' in processed_df.columns:
-        # Count mistakes from JSON arrays
-        total_mistakes = processed_df['mistakes'].apply(
-            lambda x: len(parse_json_field(x))
-        ).sum()
-        avg_mistakes = total_mistakes / total if total > 0 else 0
-    else:
-        total_mistakes = 0
-        avg_mistakes = 0
-    
-    # Severity score
-    if 'severity_score' in processed_df.columns:
-        avg_severity = processed_df['severity_score'].mean()
-    else:
-        avg_severity = 100
-    
-    # Count by severity rating
-    if 'severity_score' in processed_df.columns:
-        low_quality = len(processed_df[processed_df['severity_score'] < 50])
-    else:
-        low_quality = 0
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.markdown(f"""
-        <div style="
-            background: white;
-            padding: 1.25rem;
-            border-radius: 12px;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-            text-align: center;
-            border-top: 4px solid #E85D04;
-        ">
-            <p style="color: #666; margin: 0; font-size: 0.85rem; font-weight: 600;">ANALYZED</p>
-            <h2 style="color: #E85D04; margin: 0.5rem 0 0 0; font-size: 2rem;">{total}</h2>
-            <p style="color: #2E7D32; margin: 0.25rem 0 0 0; font-size: 0.8rem;">✓ Transcripts</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown(f"""
-        <div style="
-            background: white;
-            padding: 1.25rem;
-            border-radius: 12px;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-            text-align: center;
-            border-top: 4px solid #C62828;
-        ">
-            <p style="color: #666; margin: 0; font-size: 0.85rem; font-weight: 600;">TOTAL MISTAKES</p>
-            <h2 style="color: #C62828; margin: 0.5rem 0 0 0; font-size: 2rem;">{int(total_mistakes)}</h2>
-            <p style="color: #666; margin: 0.25rem 0 0 0; font-size: 0.8rem;">Identified</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        avg_color = "#2E7D32" if avg_mistakes <= 2 else "#F9A825" if avg_mistakes <= 4 else "#C62828"
-        st.markdown(f"""
-        <div style="
-            background: white;
-            padding: 1.25rem;
-            border-radius: 12px;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-            text-align: center;
-            border-top: 4px solid {avg_color};
-        ">
-            <p style="color: #666; margin: 0; font-size: 0.85rem; font-weight: 600;">AVG MISTAKES</p>
-            <h2 style="color: {avg_color}; margin: 0.5rem 0 0 0; font-size: 2rem;">{avg_mistakes:.1f}</h2>
-            <p style="color: #666; margin: 0.25rem 0 0 0; font-size: 0.8rem;">Per Transcript</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        severity_color = "#2E7D32" if avg_severity >= 75 else "#F9A825" if avg_severity >= 50 else "#C62828"
-        st.markdown(f"""
-        <div style="
-            background: white;
-            padding: 1.25rem;
-            border-radius: 12px;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-            text-align: center;
-            border-top: 4px solid {severity_color};
-        ">
-            <p style="color: #666; margin: 0; font-size: 0.85rem; font-weight: 600;">AVG SEVERITY</p>
-            <h2 style="color: {severity_color}; margin: 0.5rem 0 0 0; font-size: 2rem;">{avg_severity:.0f}</h2>
-            <p style="color: #666; margin: 0.25rem 0 0 0; font-size: 0.8rem;">Score /100</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def render_mistake_themes_chart(processed_df: pd.DataFrame):
-    """
-    Render bar chart showing percentage distribution of mistake themes
-    
-    Args:
-        processed_df: DataFrame containing processed results
-    """
-    import plotly.express as px
-    import plotly.graph_objects as go
-    
-    st.markdown("""
-    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
-        📊 Mistake Themes Distribution
-    </h3>
-    """, unsafe_allow_html=True)
-    
-    # Extract all mistake themes
-    if 'mistake_themes' not in processed_df.columns:
-        st.info("No mistake themes data available.")
-        return
-    
-    all_themes = []
-    for themes in processed_df['mistake_themes']:
-        parsed = parse_json_field(themes)
-        if parsed:
-            all_themes.extend(parsed)
-    
-    if not all_themes:
-        st.info("No mistake themes identified in the transcripts.")
-        return
-    
-    # Count theme occurrences
-    theme_counts = Counter(all_themes)
-    total_themes = sum(theme_counts.values())
-    
-    # Create DataFrame for chart
-    chart_data = pd.DataFrame([
-        {'Theme': theme, 'Count': count, 'Percentage': (count / total_themes) * 100}
-        for theme, count in theme_counts.most_common()
-    ])
-    
-    # Calculate number of bars
-    num_bars = len(chart_data)
-    
-    # Generate gradient colors from full orange to transparent
-    exl_colors = []
-    for i in range(num_bars):
-        # Opacity decreases from 1.0 to 0.2
-        opacity = max(0.2, 1.0 - (i * 0.8 / max(1, num_bars - 1)))
-        exl_colors.append(f'rgba(232, 93, 4, {opacity})')
-    
-    # Generate text colors - dark for transparent bars, white for opaque
-    text_colors = []
-    for i in range(num_bars):
-        opacity = max(0.2, 1.0 - (i * 0.8 / max(1, num_bars - 1)))
-        if opacity > 0.5:
-            text_colors.append('white')
-        else:
-            text_colors.append('#E85D04')
-    
-    # Create horizontal bar chart with Plotly
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=chart_data['Theme'],
-        x=chart_data['Percentage'],
-        orientation='h',
-        marker=dict(
-            color=exl_colors,
-            line=dict(color='#E85D04', width=1)
-        ),
-        text=[f"{p:.1f}%" for p in chart_data['Percentage']],
-        textposition='inside',
-        textfont=dict(color=text_colors, size=12),
-        hovertemplate='<b>%{y}</b><br>Count: %{customdata}<br>Percentage: %{x:.1f}%<extra></extra>',
-        customdata=chart_data['Count']
-    ))
-    
-    fig.update_layout(
-        title='<b>% of Mistake Themes</b>',
-        xaxis_title='Percentage (%)',
-        yaxis_title='',
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        margin=dict(l=20, r=20, t=60, b=40),
-        height=max(300, len(chart_data) * 40 + 100),
-        showlegend=False,
-        yaxis=dict(autorange='reversed'),
-        xaxis=dict(range=[0, max(chart_data['Percentage']) * 1.15], gridcolor='rgba(0,0,0,0.1)')
-    )
-    
-    # Add border styling
-    fig.update_xaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
-    fig.update_yaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_root_cause_treemap(processed_df: pd.DataFrame):
-    """
-    Render Treemap showing root cause distribution by severity level
-    
-    Args:
-        processed_df: DataFrame containing processed results
-    """
-    import plotly.express as px
-    import plotly.graph_objects as go
-    
-    st.markdown("""
-    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
-        🌳 Root Cause Treemap
-    </h3>
-    """, unsafe_allow_html=True)
-    
-    # Extract root causes (now as strings)
-    if 'root_cause' not in processed_df.columns:
-        st.info("No root cause data available.")
-        return
-    
-    # Collect root causes with their severity levels
-    root_cause_data = []
-    for _, row in processed_df.iterrows():
-        root_cause = row.get('root_cause', '')
-        if root_cause and not pd.isna(root_cause) and root_cause != '' and root_cause != 'No issues identified':
-            severity_level = row.get('severity_level', 'MEDIUM')
-            root_cause_data.append({
-                'root_cause': str(root_cause),
-                'severity_level': severity_level
-            })
-    
-    if not root_cause_data:
-        st.info("No root causes identified in the transcripts.")
-        return
-    
-    # Create DataFrame and count occurrences
-    rc_df = pd.DataFrame(root_cause_data)
-    rc_counts = rc_df.groupby(['severity_level', 'root_cause']).size().reset_index(name='count')
-    
-    # Add "All" as parent for severity levels
-    rc_counts['parent'] = rc_counts['severity_level']
-    
-    # Create hierarchical data for treemap
-    labels = ['All Root Causes']
-    parents = ['']
-    values = [rc_counts['count'].sum()]
-    colors = ['#F5F5F5']
-    
-    # Add severity levels
-    severity_colors = {
-        'HIGH': '#C62828',
-        'MEDIUM': '#F9A825', 
-        'LOW': '#2E7D32'
-    }
-    
-    for severity in ['HIGH', 'MEDIUM', 'LOW']:
-        severity_data = rc_counts[rc_counts['severity_level'] == severity]
-        if len(severity_data) > 0:
-            labels.append(severity)
-            parents.append('All Root Causes')
-            values.append(severity_data['count'].sum())
-            colors.append(severity_colors.get(severity, '#E85D04'))
-    
-    # Add root causes under their severity levels
-    for _, row in rc_counts.iterrows():
-        labels.append(row['root_cause'][:50] + '...' if len(row['root_cause']) > 50 else row['root_cause'])
-        parents.append(row['severity_level'])
-        values.append(row['count'])
-        # Lighter shade of severity color
-        base_color = severity_colors.get(row['severity_level'], '#E85D04')
-        colors.append(base_color + '99')  # Add transparency
-    
-    fig = go.Figure(go.Treemap(
-        labels=labels,
-        parents=parents,
-        values=values,
-        marker=dict(
-            colors=colors,
-            line=dict(width=2, color='white')
-        ),
-        textinfo='label+value',
-        textfont=dict(size=12),
-        hovertemplate='<b>%{label}</b><br>Count: %{value}<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='<b>Root Causes by Severity Level</b>',
-        margin=dict(l=10, r=10, t=50, b=10),
-        height=450,
-        paper_bgcolor='white'
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_agent_vs_mistake_themes_chart(processed_df: pd.DataFrame):
-    """
-    Render horizontal stacked bar chart showing Agent vs Mistake Themes distribution
-    
-    Args:
-        processed_df: DataFrame containing processed results
-    """
-    import plotly.graph_objects as go
-    
-    st.markdown("""
-    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
-        👤 Agent vs Mistake Themes
-    </h3>
-    """, unsafe_allow_html=True)
-    
-    if 'agent_name' not in processed_df.columns or 'mistake_themes' not in processed_df.columns:
-        st.info("No agent or mistake themes data available.")
-        return
-    
-    # Collect agent-theme data
-    agent_theme_data = []
-    for _, row in processed_df.iterrows():
-        agent_name = row.get('agent_name', 'Unknown')
-        themes = parse_json_field(row.get('mistake_themes', []))
-        for theme in themes:
-            agent_theme_data.append({'agent': agent_name, 'theme': theme})
-    
-    if not agent_theme_data:
-        st.info("No agent-theme associations found.")
-        return
-    
-    # Create DataFrame and count
-    at_df = pd.DataFrame(agent_theme_data)
-    at_counts = at_df.groupby(['agent', 'theme']).size().reset_index(name='count')
-    
-    # Sort agents by total mistake count (highest to lowest)
-    agent_totals = at_counts.groupby('agent')['count'].sum().sort_values(ascending=False)
-    agents = agent_totals.index.tolist()
-    
-    # Sort themes by total count (highest to lowest)
-    theme_totals = at_counts.groupby('theme')['count'].sum().sort_values(ascending=False)
-    themes = theme_totals.index.tolist()
-    
-    # Generate EXL gradient colors (orange to transparent) for themes - highest count gets darkest
-    num_themes = len(themes)
-    theme_colors = []
-    for i in range(num_themes):
-        opacity = max(0.2, 1.0 - (i * 0.8 / max(1, num_themes - 1)))
-        theme_colors.append(f'rgba(232, 93, 4, {opacity})')
-    
-    fig = go.Figure()
-    
-    for i, theme in enumerate(themes):
-        theme_data = at_counts[at_counts['theme'] == theme]
-        counts = [theme_data[theme_data['agent'] == agent]['count'].sum() if agent in theme_data['agent'].values else 0 for agent in agents]
-        
-        fig.add_trace(go.Bar(
-            name=theme,  # Show full theme name in legend
-            y=agents,
-            x=counts,
-            orientation='h',
-            marker=dict(
-                color=theme_colors[i % len(theme_colors)],
-                line=dict(color='#E85D04', width=1)
-            ),
-            hovertemplate='<b>%{y}</b><br>Theme: ' + theme + '<br>Count: %{x}<extra></extra>'
-        ))
-    
-    fig.update_layout(
-        barmode='stack',
-        xaxis_title='Count',
-        yaxis_title='',
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        margin=dict(l=20, r=250, t=10, b=80),
-        height=max(400, len(agents) * 50 + 100),
-        legend=dict(
-            orientation="h",
-            yanchor="top",
-            y=-0.15,
-            xanchor="center",
-            x=0.5,
-            font=dict(size=9),
-            bgcolor='rgba(255,255,255,0.95)',
-            bordercolor='#E85D04',
-            borderwidth=1,
-            tracegroupgap=2
-        ),
-        yaxis=dict(categoryorder='array', categoryarray=agents[::-1])
-    )
-    
-    fig.update_xaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE, gridcolor='rgba(0,0,0,0.1)')
-    fig.update_yaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_mistake_themes_vs_agents_chart(processed_df: pd.DataFrame):
-    """
-    Render horizontal bar chart showing each Mistake Theme and how many agents committed it
-    
-    Args:
-        processed_df: DataFrame containing processed results
-    """
-    import plotly.graph_objects as go
-    
-    st.markdown("""
-    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
-        ⚠️ Mistake Themes vs Agents
-    </h3>
-    """, unsafe_allow_html=True)
-    
-    if 'agent_name' not in processed_df.columns or 'mistake_themes' not in processed_df.columns:
-        st.info("No agent or mistake themes data available.")
-        return
-    
-    # Count unique agents per mistake theme
-    theme_agent_data = {}
-    for _, row in processed_df.iterrows():
-        agent_name = row.get('agent_name', 'Unknown')
-        themes = parse_json_field(row.get('mistake_themes', []))
-        for theme in themes:
-            if theme not in theme_agent_data:
-                theme_agent_data[theme] = set()
-            theme_agent_data[theme].add(agent_name)
-    
-    if not theme_agent_data:
-        st.info("No mistake themes data found.")
-        return
-    
-    # Create DataFrame with theme and agent count
-    chart_data = pd.DataFrame([
-        {'Theme': theme, 'Agent Count': len(agents)}
-        for theme, agents in theme_agent_data.items()
-    ])
-    chart_data = chart_data.sort_values('Agent Count', ascending=True)
-    
-    # Generate EXL gradient colors (orange to transparent)
-    num_bars = len(chart_data)
-    bar_colors = []
-    for i in range(num_bars):
-        # Gradient so highest value has most opacity
-        opacity = max(0.2, 0.2 + (i * 0.8 / max(1, num_bars - 1)))
-        bar_colors.append(f'rgba(232, 93, 4, {opacity})')
-    
-    # Generate text colors based on opacity
-    text_colors = []
-    for i in range(num_bars):
-        opacity = max(0.2, 0.2 + (i * 0.8 / max(1, num_bars - 1)))
-        if opacity > 0.5:
-            text_colors.append('white')
-        else:
-            text_colors.append('#E85D04')
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=chart_data['Theme'],
-        x=chart_data['Agent Count'],
-        orientation='h',
-        marker=dict(
-            color=bar_colors,
-            line=dict(color='#E85D04', width=1)
-        ),
-        text=chart_data['Agent Count'],
-        textposition='inside',
-        textfont=dict(color=text_colors, size=12, weight='bold'),
-        hovertemplate='<b>%{y}</b><br>Agents with this mistake: %{x}<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='<b>Agents per Mistake Theme</b>',
-        xaxis_title='Number of Agents',
-        yaxis_title='',
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        margin=dict(l=20, r=20, t=60, b=40),
-        height=max(300, len(chart_data) * 40 + 100),
-        showlegend=False
-    )
-    
-    fig.update_xaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE, gridcolor='rgba(0,0,0,0.1)')
-    fig.update_yaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_agent_vs_root_cause_treemap(processed_df: pd.DataFrame):
-    """
-    Render Treemap showing Agent vs Root Cause distribution with green to red gradient
-    
-    Args:
-        processed_df: DataFrame containing processed results
-    """
-    import plotly.graph_objects as go
-    
-    st.markdown("""
-    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
-        🌳 Agent vs Root Cause
-    </h3>
-    """, unsafe_allow_html=True)
-    
-    if 'agent_name' not in processed_df.columns or 'root_cause' not in processed_df.columns:
-        st.info("No agent or root cause data available.")
-        return
-    
-    # Collect agent-root cause data
-    agent_rc_data = []
-    for _, row in processed_df.iterrows():
-        agent_name = row.get('agent_name', 'Unknown')
-        root_cause = row.get('root_cause', '')
-        if root_cause and not pd.isna(root_cause) and root_cause != '' and root_cause != 'No issues identified':
-            agent_rc_data.append({'agent': agent_name, 'root_cause': str(root_cause)})
-    
-    if not agent_rc_data:
-        st.info("No agent-root cause associations found.")
-        return
-    
-    # Create DataFrame and count
-    arc_df = pd.DataFrame(agent_rc_data)
-    arc_counts = arc_df.groupby(['agent', 'root_cause']).size().reset_index(name='count')
-    
-    # Create hierarchical data for treemap
-    labels = ['All Agents']
-    parents = ['']
-    values = [arc_counts['count'].sum()]
-    colors = ['#E85D04']
-    
-    # Get agents sorted by total count (highest first for better visibility)
-    agent_totals = arc_counts.groupby('agent')['count'].sum().sort_values(ascending=False)
-    agents = agent_totals.index.tolist()
-    num_agents = len(agents)
-    
-    # Generate EXL orange gradient for agents (dark to light based on count)
-    def get_orange_gradient(index, total):
-        """Generate EXL orange gradient from dark (#C44102) to light (#FFAB76)"""
-        if total <= 1:
-            return '#E85D04'
-        ratio = index / (total - 1)
-        # Dark orange to light orange
-        r = int(196 + (255 - 196) * ratio)  # 196 to 255
-        g = int(65 + (171 - 65) * ratio)    # 65 to 171
-        b = int(2 + (118 - 2) * ratio)      # 2 to 118
-        return f'rgb({r}, {g}, {b})'
-    
-    # Add agents with gradient colors (darkest = highest count)
-    agent_color_map = {}
-    for i, agent in enumerate(agents):
-        agent_data = arc_counts[arc_counts['agent'] == agent]
-        labels.append(agent)
-        parents.append('All Agents')
-        values.append(agent_data['count'].sum())
-        agent_color = get_orange_gradient(i, num_agents)
-        colors.append(agent_color)
-        agent_color_map[agent] = agent_color
-    
-    # Add root causes under agents with slightly darker shade
-    for agent in agents:
-        agent_data = arc_counts[arc_counts['agent'] == agent]
-        for _, row in agent_data.iterrows():
-            rc_label = row['root_cause'][:40] + '...' if len(row['root_cause']) > 40 else row['root_cause']
-            labels.append(rc_label)
-            parents.append(agent)
-            values.append(row['count'])
-            # Use a complementary color for children
-            colors.append('#1A1A2E')
-    
-    fig = go.Figure(go.Treemap(
-        labels=labels,
-        parents=parents,
-        values=values,
-        marker=dict(
-            colors=colors,
-            line=dict(width=2, color='white')
-        ),
-        textinfo='label+value',
-        textfont=dict(size=12, color='white'),
-        hovertemplate='<b>%{label}</b><br>Count: %{value}<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='<b>Root Causes by Agent</b>',
-        margin=dict(l=10, r=10, t=50, b=10),
-        height=400,
-        paper_bgcolor='white'
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_agent_vs_severity_treemap(processed_df: pd.DataFrame):
-    """
-    Render Treemap showing Agent vs Severity Level distribution with green to red gradient
-    
-    Args:
-        processed_df: DataFrame containing processed results
-    """
-    import plotly.graph_objects as go
-    
-    st.markdown("""
-    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
-        🎯 Agent vs Severity
-    </h3>
-    """, unsafe_allow_html=True)
-    
-    if 'agent_name' not in processed_df.columns:
-        st.info("No agent data available.")
-        return
-    
-    # Create a copy and ensure severity_level exists
-    df_copy = processed_df.copy()
-    if 'severity_level' not in df_copy.columns and 'severity_score' in df_copy.columns:
+    # Create a copy of the DataFrame and add severity_level if needed
+    df_with_severity = processed_df.copy()
+    if 'severity_level' not in df_with_severity.columns and 'severity_score' in df_with_severity.columns:
         def get_severity_level(score):
             if score > 80:
                 return "HIGH"
@@ -710,140 +64,72 @@ def render_agent_vs_severity_treemap(processed_df: pd.DataFrame):
                 return "LOW"
             else:
                 return "MEDIUM"
-        df_copy['severity_level'] = df_copy['severity_score'].apply(get_severity_level)
-    
-    if 'severity_level' not in df_copy.columns:
-        st.info("No severity data available.")
-        return
-    
-    # Count agent-severity combinations
-    as_counts = df_copy.groupby(['agent_name', 'severity_level']).size().reset_index(name='count')
-    
-    if as_counts.empty:
-        st.info("No agent-severity data found.")
-        return
-    
-    # Create hierarchical data for treemap
-    labels = ['All Agents']
-    parents = ['']
-    values = [as_counts['count'].sum()]
-    colors = ['#E85D04']
-    
-    # Severity colors - clear and distinct
-    severity_colors = {
-        'LOW': '#2E7D32',      # Green - good
-        'MEDIUM': '#F9A825',   # Yellow/Orange - warning
-        'HIGH': '#C62828'      # Red - bad
-    }
-    
-    # Get agents sorted by total issues (highest first)
-    agent_totals = as_counts.groupby('agent_name')['count'].sum().sort_values(ascending=False)
-    agents = agent_totals.index.tolist()
-    num_agents = len(agents)
-    
-    # Generate EXL orange gradient for agents
-    def get_orange_gradient(index, total):
-        """Generate EXL orange gradient from dark (#C44102) to light (#FFAB76)"""
-        if total <= 1:
-            return '#E85D04'
-        ratio = index / (total - 1)
-        # Dark orange to light orange
-        r = int(196 + (255 - 196) * ratio)  # 196 to 255
-        g = int(65 + (171 - 65) * ratio)    # 65 to 171
-        b = int(2 + (118 - 2) * ratio)      # 2 to 118
-        return f'rgb({r}, {g}, {b})'
-    
-    # Add agents with gradient colors (darkest = highest issues)
-    for i, agent in enumerate(agents):
-        agent_data = as_counts[as_counts['agent_name'] == agent]
-        labels.append(agent)
-        parents.append('All Agents')
-        values.append(agent_data['count'].sum())
-        colors.append(get_orange_gradient(i, num_agents))
-    
-    # Add severity levels under agents with severity-specific colors
-    for agent in agents:
-        agent_data = as_counts[as_counts['agent_name'] == agent]
-        for _, row in agent_data.iterrows():
-            severity = row['severity_level']
-            labels.append(f"{severity} ({row['count']})")
-            parents.append(agent)
-            values.append(row['count'])
-            colors.append(severity_colors.get(severity, '#F9A825'))
-    
-    fig = go.Figure(go.Treemap(
-        labels=labels,
-        parents=parents,
-        values=values,
-        marker=dict(
-            colors=colors,
-            line=dict(width=2, color='white')
-        ),
-        textinfo='label',
-        textfont=dict(size=12, color='white'),
-        hovertemplate='<b>%{label}</b><br>Count: %{value}<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='<b>Severity Levels by Agent</b>',
-        margin=dict(l=10, r=10, t=50, b=10),
-        height=400,
-        paper_bgcolor='white'
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-
-def render_results_table(processed_df: pd.DataFrame):
-    """
-    Render the detailed results table
-    
-    Args:
-        processed_df: DataFrame containing processed results
-    """
-    
-    st.markdown("""
-    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
-        📋 Detailed Analysis Results
-    </h3>
-    """, unsafe_allow_html=True)
-    
-    # Create a copy of the DataFrame for filtering
-    df_copy = processed_df.copy()
-    
-    # Add severity_level column if not present
-    if 'severity_level' not in df_copy.columns and 'severity_score' in df_copy.columns:
-        def get_severity_level(score):
-            if score > 80:
-                return "HIGH"
-            elif score >= 60:
-                return "MEDIUM"
-            elif score < 50:
-                return "LOW"
-            else:
-                return "MEDIUM"
-        df_copy['severity_level'] = df_copy['severity_score'].apply(get_severity_level)
+        df_with_severity['severity_level'] = df_with_severity['severity_score'].apply(get_severity_level)
     
     # Initialize session state for severity level filter
     if 'severity_level_filter' not in st.session_state:
         st.session_state.severity_level_filter = 'All'
     
-    # Severity Level filter buttons with custom styling
-    if 'severity_level' in df_copy.columns:
-        # Get current selection
+    # Apply severity level filter FIRST to get filtered dataframe
+    filtered_df = df_with_severity.copy()
+    if 'severity_level' in filtered_df.columns and st.session_state.get('severity_level_filter', 'All') != 'All':
+        filtered_df = filtered_df[filtered_df['severity_level'] == st.session_state.severity_level_filter]
+    
+    # Summary metrics (using filtered data)
+    render_results_summary(filtered_df)
+    
+    st.markdown("---")
+    
+    # Severity Level filter buttons AFTER cards and BEFORE table
+    if 'severity_level' in df_with_severity.columns:
         current_filter = st.session_state.severity_level_filter
-        
-        # Use radio button styled as segmented control
         filter_options = ['All', 'HIGH', 'MEDIUM', 'LOW']
         
-        selected = st.radio(
-            "Filter by Severity Level:",
-            filter_options,
-            index=filter_options.index(current_filter),
-            horizontal=True,
-            label_visibility="visible",
-            key="severity_radio"
-        )
+        # Create columns for radio buttons and info icon
+        filter_col, info_col = st.columns([10, 1])
+        
+        with filter_col:
+            selected = st.radio(
+                "Filter by Severity Level:",
+                filter_options,
+                index=filter_options.index(current_filter),
+                horizontal=True,
+                label_visibility="visible",
+                key="severity_radio_main"
+            )
+        
+        with info_col:
+            # Info icon with popover for severity level explanations
+            with st.popover("ℹ️", use_container_width=False):
+                st.markdown("""
+                <div style="padding: 0.5rem;">
+                    <h4 style="color: #1A1A2E; margin: 0 0 1rem 0; font-size: 1rem;">Severity Level Definitions</h4>
+                    
+                    <div style="margin-bottom: 1rem; padding: 0.75rem; background: #FFEBEE; border-radius: 8px; border-left: 4px solid #C62828;">
+                        <strong style="color: #C62828;">🔴 HIGH (Score > 80)</strong>
+                        <p style="margin: 0.5rem 0 0 0; color: #333; font-size: 0.85rem;">
+                            Critical issues requiring immediate attention. Major compliance violations, 
+                            significant customer impact, or severe process failures.
+                        </p>
+                    </div>
+                    
+                    <div style="margin-bottom: 1rem; padding: 0.75rem; background: #FFF8E1; border-radius: 8px; border-left: 4px solid #F9A825;">
+                        <strong style="color: #F57F17;">🟡 MEDIUM (Score 50-80)</strong>
+                        <p style="margin: 0.5rem 0 0 0; color: #333; font-size: 0.85rem;">
+                            Moderate issues needing review. Process deviations, communication gaps, 
+                            or areas requiring coaching and improvement.
+                        </p>
+                    </div>
+                    
+                    <div style="padding: 0.75rem; background: #E8F5E9; border-radius: 8px; border-left: 4px solid #2E7D32;">
+                        <strong style="color: #2E7D32;">🟢 LOW (Score < 50)</strong>
+                        <p style="margin: 0.5rem 0 0 0; color: #333; font-size: 0.85rem;">
+                            Minor issues or good performance. Small improvements possible, 
+                            but overall acceptable quality and compliance.
+                        </p>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
         
         if selected != current_filter:
             st.session_state.severity_level_filter = selected
@@ -947,10 +233,437 @@ def render_results_table(processed_df: pd.DataFrame):
         </style>
         """, unsafe_allow_html=True)
     
-    # Apply severity level filter
-    display_df = df_copy.copy()
-    if 'severity_level' in display_df.columns and st.session_state.get('severity_level_filter', 'All') != 'All':
-        display_df = display_df[display_df['severity_level'] == st.session_state.severity_level_filter]
+    # Show filter status
+    filter_status = st.session_state.get('severity_level_filter', 'All')
+    if filter_status != 'All':
+        st.info(f"🔍 Showing {len(filtered_df)} of {len(df_with_severity)} records filtered by **{filter_status}** severity")
+    
+    st.markdown("---")
+    
+    # Detailed results table (using filtered data)
+    render_results_table(filtered_df)
+    st.markdown("---")
+    
+    # Charts Row 1: Mistake Themes & Root Cause Treemap side by side (using filtered data)
+    col1, col2 = st.columns(2)
+    with col1:
+        render_mistake_themes_chart(filtered_df)
+    with col2:
+        render_mistake_themes_vs_agents_chart(filtered_df)
+    
+    st.markdown("---")
+    
+    # Charts Row 2: Agent vs Mistake Themes & Mistake Themes vs Agents (using filtered data)
+    col3, col4 = st.columns(2)
+    with col3:
+        render_agent_vs_mistake_themes_chart(filtered_df)
+        
+
+    
+
+
+
+def render_results_summary(processed_df: pd.DataFrame):
+    """
+    Render summary metrics for analysis results
+    
+    Args:
+        processed_df: DataFrame containing processed results
+    """
+    
+    total = len(processed_df)
+    
+    # Calculate metrics - handle new JSON format columns
+    if 'mistakes' in processed_df.columns:
+        # Count mistakes from JSON arrays
+        total_mistakes = processed_df['mistakes'].apply(
+            lambda x: len(parse_json_field(x))
+        ).sum()
+        avg_mistakes = total_mistakes / total if total > 0 else 0
+    else:
+        total_mistakes = 0
+        avg_mistakes = 0
+    
+    # Severity score
+    if 'severity_score' in processed_df.columns:
+        avg_severity = processed_df['severity_score'].mean()
+    else:
+        avg_severity = 100
+    
+    # Count by severity rating
+    if 'severity_score' in processed_df.columns:
+        low_quality = len(processed_df[processed_df['severity_score'] < 50])
+    else:
+        low_quality = 0
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(f"""
+        <div style="
+            background: white;
+            padding: 0.75rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            text-align: center;
+            border-top: 3px solid #E85D04;
+        ">
+            <p style="color: #666; margin: 0; font-size: 0.7rem; font-weight: 600;">ANALYZED</p>
+            <h2 style="color: #E85D04; margin: 0.25rem 0 0 0; font-size: 1.5rem;">{total}</h2>
+            <p style="color: #2E7D32; margin: 0.15rem 0 0 0; font-size: 0.65rem;">✓ Transcripts</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div style="
+            background: white;
+            padding: 0.75rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            text-align: center;
+            border-top: 3px solid #C62828;
+        ">
+            <p style="color: #666; margin: 0; font-size: 0.7rem; font-weight: 600;">TOTAL MISTAKES</p>
+            <h2 style="color: #C62828; margin: 0.25rem 0 0 0; font-size: 1.5rem;">{int(total_mistakes)}</h2>
+            <p style="color: #666; margin: 0.15rem 0 0 0; font-size: 0.65rem;">Identified</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        avg_color = "#2E7D32" if avg_mistakes <= 2 else "#F9A825" if avg_mistakes <= 4 else "#C62828"
+        st.markdown(f"""
+        <div style="
+            background: white;
+            padding: 0.75rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            text-align: center;
+            border-top: 3px solid {avg_color};
+        ">
+            <p style="color: #666; margin: 0; font-size: 0.7rem; font-weight: 600;">AVG MISTAKES</p>
+            <h2 style="color: {avg_color}; margin: 0.25rem 0 0 0; font-size: 1.5rem;">{avg_mistakes:.1f}</h2>
+            <p style="color: #666; margin: 0.15rem 0 0 0; font-size: 0.65rem;">Per Transcript</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        severity_color = "#2E7D32" if avg_severity >= 75 else "#F9A825" if avg_severity >= 50 else "#C62828"
+        st.markdown(f"""
+        <div style="
+            background: white;
+            padding: 0.75rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            text-align: center;
+            border-top: 3px solid {severity_color};
+        ">
+            <p style="color: #666; margin: 0; font-size: 0.7rem; font-weight: 600;">AVG SEVERITY</p>
+            <h2 style="color: {severity_color}; margin: 0.25rem 0 0 0; font-size: 1.5rem;">{avg_severity:.0f}</h2>
+            <p style="color: #666; margin: 0.15rem 0 0 0; font-size: 0.65rem;">Score /100</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def render_mistake_themes_chart(processed_df: pd.DataFrame):
+    """
+    Render bar chart showing percentage distribution of mistake themes
+    
+    Args:
+        processed_df: DataFrame containing processed results
+    """
+    import plotly.express as px
+    import plotly.graph_objects as go
+    
+    st.markdown("""
+    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
+        📊 Mistake Themes Distribution
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    # Extract all mistake themes
+    if 'mistake_themes' not in processed_df.columns:
+        st.info("No mistake themes data available.")
+        return
+    
+    all_themes = []
+    for themes in processed_df['mistake_themes']:
+        parsed = parse_json_field(themes)
+        if parsed:
+            all_themes.extend(parsed)
+    
+    if not all_themes:
+        st.info("No mistake themes identified in the transcripts.")
+        return
+    
+    # Count theme occurrences
+    theme_counts = Counter(all_themes)
+    total_themes = sum(theme_counts.values())
+    
+    # Create DataFrame for chart
+    chart_data = pd.DataFrame([
+        {'Theme': theme, 'Count': count, 'Percentage': (count / total_themes) * 100}
+        for theme, count in theme_counts.most_common()
+    ])
+    
+    # Calculate number of bars
+    num_bars = len(chart_data)
+    
+    # Generate gradient colors from full orange to transparent
+    exl_colors = []
+    for i in range(num_bars):
+        # Opacity decreases from 1.0 to 0.2
+        opacity = max(0.2, 1.0 - (i * 0.8 / max(1, num_bars - 1)))
+        exl_colors.append(f'rgba(232, 93, 4, {opacity})')
+    
+    # Generate text colors - dark for transparent bars, white for opaque
+    text_colors = []
+    for i in range(num_bars):
+        opacity = max(0.2, 1.0 - (i * 0.8 / max(1, num_bars - 1)))
+        if opacity > 0.5:
+            text_colors.append('white')
+        else:
+            text_colors.append('#E85D04')
+    
+    # Create horizontal bar chart with Plotly
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=chart_data['Theme'],
+        x=chart_data['Percentage'],
+        orientation='h',
+        marker=dict(
+            color=exl_colors,
+            line=dict(color='#E85D04', width=1)
+        ),
+        text=[f"{p:.1f}%" for p in chart_data['Percentage']],
+        textposition='inside',
+        textfont=dict(color='#1A1A2E', size=12, family='Arial Black'),
+        hovertemplate='<b>%{y}</b><br>Count: %{customdata}<br>Percentage: %{x:.1f}%<extra></extra>',
+        customdata=chart_data['Count']
+    ))
+    
+    fig.update_layout(
+        title='<b>% of Mistake Themes</b>',
+        xaxis_title='Percentage (%)',
+        yaxis_title='',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=20, r=20, t=60, b=40),
+        height=max(300, len(chart_data) * 40 + 100),
+        showlegend=False,
+        yaxis=dict(
+            autorange='reversed',
+            tickfont=dict(size=12, color='#1A1A2E', family='Arial', weight='bold')
+        ),
+        xaxis=dict(range=[0, max(chart_data['Percentage']) * 1.15], gridcolor='rgba(0,0,0,0.1)')
+    )
+    
+    # Add border styling
+    fig.update_xaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
+    fig.update_yaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+
+
+
+
+def render_agent_vs_mistake_themes_chart(processed_df: pd.DataFrame):
+    """
+    Render horizontal stacked bar chart showing Agent vs Mistake Themes distribution
+    
+    Args:
+        processed_df: DataFrame containing processed results
+    """
+    import plotly.graph_objects as go
+    
+    st.markdown("""
+    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
+        👤 Agent vs Mistake Themes
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    if 'agent_name' not in processed_df.columns or 'mistake_themes' not in processed_df.columns:
+        st.info("No agent or mistake themes data available.")
+        return
+    
+    # Collect agent-theme data
+    agent_theme_data = []
+    for _, row in processed_df.iterrows():
+        agent_name = row.get('agent_name', 'Unknown')
+        themes = parse_json_field(row.get('mistake_themes', []))
+        for theme in themes:
+            agent_theme_data.append({'agent': agent_name, 'theme': theme})
+    
+    if not agent_theme_data:
+        st.info("No agent-theme associations found.")
+        return
+    
+    # Create DataFrame and count
+    at_df = pd.DataFrame(agent_theme_data)
+    at_counts = at_df.groupby(['agent', 'theme']).size().reset_index(name='count')
+    
+    # Sort agents by total mistake count (highest to lowest)
+    agent_totals = at_counts.groupby('agent')['count'].sum().sort_values(ascending=False)
+    agents = agent_totals.index.tolist()
+    
+    # Sort themes by total count (highest to lowest)
+    theme_totals = at_counts.groupby('theme')['count'].sum().sort_values(ascending=False)
+    themes = theme_totals.index.tolist()
+    
+    # Generate EXL gradient colors (orange to transparent) for themes - highest count gets darkest
+    num_themes = len(themes)
+    theme_colors = []
+    for i in range(num_themes):
+        opacity = max(0.2, 1.0 - (i * 0.8 / max(1, num_themes - 1)))
+        theme_colors.append(f'rgba(232, 93, 4, {opacity})')
+    
+    fig = go.Figure()
+    
+    for i, theme in enumerate(themes):
+        theme_data = at_counts[at_counts['theme'] == theme]
+        counts = [theme_data[theme_data['agent'] == agent]['count'].sum() if agent in theme_data['agent'].values else 0 for agent in agents]
+        
+        fig.add_trace(go.Bar(
+            name=theme,  # Show full theme name in legend
+            y=agents,
+            x=counts,
+            orientation='h',
+            marker=dict(
+                color=theme_colors[i % len(theme_colors)],
+                line=dict(color='#E85D04', width=1)
+            ),
+            hovertemplate='<b>%{y}</b><br>Theme: ' + theme + '<br>Count: %{x}<extra></extra>'
+        ))
+    
+    fig.update_layout(
+        barmode='stack',
+        xaxis_title='Count',
+        yaxis_title='',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=20, r=20, t=10, b=40),
+        height=max(400, len(agents) * 50 + 100),
+        showlegend=False,
+        yaxis=dict(categoryorder='array', categoryarray=agents[::-1])
+    )
+    
+    fig.update_xaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE, gridcolor='rgba(0,0,0,0.1)')
+    fig.update_yaxes(showline=True, linewidth=2, linecolor=EXLTheme.PRIMARY_ORANGE)
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_mistake_themes_vs_agents_chart(processed_df: pd.DataFrame):
+    """
+    Render horizontal bar chart showing each Mistake Theme and how many agents committed it
+    
+    Args:
+        processed_df: DataFrame containing processed results
+    """
+    import plotly.graph_objects as go
+    
+    st.markdown("""
+    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
+        ⚠️ Mistake Themes vs Agents
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    if 'agent_name' not in processed_df.columns or 'mistake_themes' not in processed_df.columns:
+        st.info("No agent or mistake themes data available.")
+        return
+    
+    # Count unique agents per mistake theme
+    theme_agent_data = {}
+    for _, row in processed_df.iterrows():
+        agent_name = row.get('agent_name', 'Unknown')
+        themes = parse_json_field(row.get('mistake_themes', []))
+        for theme in themes:
+            if theme not in theme_agent_data:
+                theme_agent_data[theme] = set()
+            theme_agent_data[theme].add(agent_name)
+    
+    if not theme_agent_data:
+        st.info("No mistake themes data found.")
+        return
+    
+    # Create DataFrame with theme and agent count
+    chart_data = pd.DataFrame([
+        {'Theme': theme, 'Agent Count': len(agents)}
+        for theme, agents in theme_agent_data.items()
+    ])
+    chart_data = chart_data.sort_values('Agent Count', ascending=True)
+    
+    # Generate blue gradient colors (dark blue to light blue)
+    num_bars = len(chart_data)
+    bar_colors = []
+    for i in range(num_bars):
+        # Gradient so highest value has most opacity
+        opacity = max(0.3, 0.3 + (i * 0.7 / max(1, num_bars - 1)))
+        bar_colors.append(f'rgba(30, 136, 229, {opacity})')  # Blue color
+    
+    # Generate text colors based on opacity
+    text_colors = []
+    for i in range(num_bars):
+        opacity = max(0.3, 0.3 + (i * 0.7 / max(1, num_bars - 1)))
+        if opacity > 0.5:
+            text_colors.append('white')
+        else:
+            text_colors.append('#1565C0')
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=chart_data['Theme'],
+        x=chart_data['Agent Count'],
+        orientation='h',
+        marker=dict(
+            color=bar_colors,
+            line=dict(color='#1565C0', width=1)  # Dark blue border
+        ),
+        text=chart_data['Agent Count'],
+        textposition='inside',
+        textfont=dict(color=text_colors, size=12, weight='bold'),
+        hovertemplate='<b>%{y}</b><br>Agents with this mistake: %{x}<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title='<b>Agents per Mistake Theme</b>',
+        xaxis_title='Number of Agents',
+        yaxis_title='',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=20, r=20, t=60, b=40),
+        height=max(300, len(chart_data) * 40 + 100),
+        showlegend=False
+    )
+    
+    fig.update_xaxes(showline=True, linewidth=2, linecolor='#1565C0', gridcolor='rgba(0,0,0,0.1)')
+    fig.update_yaxes(showline=True, linewidth=2, linecolor='#1565C0')
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+
+
+
+
+def render_results_table(processed_df: pd.DataFrame):
+    """
+    Render the detailed results table
+    
+    Args:
+        processed_df: DataFrame containing processed results (already filtered by severity)
+    """
+    
+    st.markdown("""
+    <h3 style="color: #1A1A2E; margin: 1.5rem 0 1rem 0;">
+        📋 Detailed Analysis Results
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    # Use the already filtered dataframe
+    display_df = processed_df.copy()
     
     # Define columns to display (matching new output format)
     # Expected columns: transcript_id, agent_name, agent_id, transcript_call, mistakes, 
@@ -1018,126 +731,3 @@ def render_results_table(processed_df: pd.DataFrame):
         hide_index=True,
         height=400
     )
-    
-    st.info(f"📊 Showing {len(display_df)} of {len(processed_df)} records")
-
-
-def render_training_opportunities_table(processed_df: pd.DataFrame):
-    """
-    Render Training Opportunities table showing Root Cause to Training mapping with % of Total Errors
-    
-    Args:
-        processed_df: DataFrame containing processed results
-    """
-    
-    if 'root_cause' not in processed_df.columns:
-        st.info("No root cause data available for training opportunities.")
-        return
-    
-    # Collect root causes with their agent_recommendation (training)
-    root_cause_data = {}
-    total_errors = 0
-    
-    for _, row in processed_df.iterrows():
-        root_cause = row.get('root_cause', '')
-        agent_recommendation = row.get('agent_recommendation', '')
-        
-        if root_cause and not pd.isna(root_cause) and root_cause != '' and root_cause != 'No issues identified':
-            root_cause_str = str(root_cause).strip()
-            training = str(agent_recommendation).strip() if agent_recommendation and not pd.isna(agent_recommendation) else 'General Skills Enhancement Training'
-            
-            if root_cause_str not in root_cause_data:
-                root_cause_data[root_cause_str] = {
-                    'count': 0,
-                    'training': training
-                }
-            root_cause_data[root_cause_str]['count'] += 1
-            total_errors += 1
-        
-    if not root_cause_data or total_errors == 0:
-        st.info("No root causes identified in the transcripts.")
-        return
-    
-    # Create table data with percentage calculation
-    table_data = []
-    for root_cause, data in root_cause_data.items():
-        percentage = (data['count'] / total_errors) * 100
-        table_data.append({
-            'Root Cause': root_cause,
-            '% of Total Errors': f"{percentage:.0f}%",
-            'Training Opportunity': data['training'],
-            '_percentage': percentage  # For sorting
-        })
-    
-    # Sort by percentage (highest first)
-    table_data.sort(key=lambda x: x['_percentage'], reverse=True)
-    
-    # Get top 3 training opportunities for header
-    top_trainings = []
-    seen_trainings = set()
-    for item in table_data:
-        training = item['Training Opportunity']
-        if training not in seen_trainings and len(top_trainings) < 3:
-            top_trainings.append(training)
-            seen_trainings.add(training)
-    
-    # Render header with top training opportunities
-    st.markdown(f"""
-    <div style="
-        background: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-        margin: 1.5rem 0;
-    ">
-        <h3 style="
-            color: #006666;
-            text-align: center;
-            margin: 0 0 1rem 0;
-            font-size: 1.5rem;
-            font-weight: 700;
-        ">Training Opportunities</h3>
-        <p style="
-            text-align: center;
-            color: #333;
-            margin-bottom: 1.5rem;
-            font-size: 0.95rem;
-        ">
-            <span style="font-weight: 600;">Top Training opportunities are:</span> {', '.join(top_trainings)}
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Build HTML table
-    table_rows = ""
-    for item in table_data:
-        table_rows += f"""
-        <tr>
-            <td style="padding: 12px 16px; border-bottom: 1px solid #E0E0E0; color: #333;">{item['Root Cause']}</td>
-            <td style="padding: 12px 16px; border-bottom: 1px solid #E0E0E0; text-align: center; color: #006666; font-weight: 600;">{item['% of Total Errors']}</td>
-            <td style="padding: 12px 16px; border-bottom: 1px solid #E0E0E0; color: #333;">{item['Training Opportunity']}</td>
-        </tr>
-        """
-    
-    st.markdown(f"""
-    <div style="
-        background: white;
-        border-radius: 12px;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-        overflow: hidden;
-        margin-bottom: 1.5rem;
-    ">
-        <table style="width: 100%; border-collapse: collapse;">
-            <thead>
-                <tr style="background: #006666;">
-                    <th style="padding: 14px 16px; text-align: left; color: white; font-weight: 600; font-size: 0.9rem;">Root Cause</th>
-                    <th style="padding: 14px 16px; text-align: center; color: white; font-weight: 600; font-size: 0.9rem;">% of Total Errors</th>
-                    <th style="padding: 14px 16px; text-align: left; color: white; font-weight: 600; font-size: 0.9rem;">Training Opportunity</th>
-                </tr>
-            </thead>
-            <tbody>
-                {table_rows}
-            </tbody>
-        </table>
-    </div>
-    """, unsafe_allow_html=True)
